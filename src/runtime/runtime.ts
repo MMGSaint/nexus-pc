@@ -83,6 +83,12 @@ import { SessionStore } from './session-state.js';
 import type { SessionRecord } from './session-state.js';
 import { StageTracker } from './stages.js';
 
+/**
+ * Window over which applications are counted for cooldowns and the hourly
+ * rate limit. Matches the kernel's own window.
+ */
+const RATE_LIMIT_WINDOW_MS = 3_600_000;
+
 export interface RuntimeOptions {
   readonly paths: NexusPaths;
   readonly config: NexusConfig;
@@ -325,7 +331,8 @@ export class NexusRuntime implements VesperHost {
         this.degrade(outcome.summary);
         this.runState = 'observation_only';
       }
-      return outcome.summary;
+      const restored = await this.restoreAppliedHistory();
+      return restored > 0 ? `${outcome.summary} Carried ${restored} recent change(s) forward.` : outcome.summary;
     });
 
     this.startHeartbeat();
@@ -527,6 +534,36 @@ export class NexusRuntime implements VesperHost {
         vesperListening: this.vesper?.listening ?? false,
       })),
     );
+  }
+
+  /**
+   * Rebuild the recent-application history from the journal.
+   *
+   * Cooldowns and the hourly rate limit are only meaningful if they survive a
+   * restart. Keeping them in memory alone would mean restarting NEXUS — which
+   * a crash loop does automatically — silently cleared every limit that exists
+   * to stop a control being hammered.
+   */
+  private async restoreAppliedHistory(): Promise<number> {
+    const cutoff = this.clock.now() - RATE_LIMIT_WINDOW_MS;
+    let restored = 0;
+    for (const record of await this.journal.list()) {
+      if (record.updatedAtMs < cutoff) continue;
+      for (const control of record.appliedControls) {
+        this.appliedHistory.push({ control, appliedAtMs: record.updatedAtMs });
+        restored += 1;
+      }
+    }
+    return restored;
+  }
+
+  /** Drop applications that have aged out of the rate-limit window. */
+  private pruneAppliedHistory(): void {
+    const cutoff = this.clock.now() - RATE_LIMIT_WINDOW_MS;
+    for (let i = this.appliedHistory.length - 1; i >= 0; i -= 1) {
+      const entry = this.appliedHistory[i];
+      if (entry && entry.appliedAtMs < cutoff) this.appliedHistory.splice(i, 1);
+    }
   }
 
   private degrade(reason: string): void {
@@ -953,6 +990,7 @@ export class NexusRuntime implements VesperHost {
     for (const change of outcome.appliedChanges) {
       this.appliedHistory.push({ control: change.control, appliedAtMs: change.appliedAtMs });
     }
+    this.pruneAppliedHistory();
     if (outcome.status === 'applied_kept') {
       this.activeProfileId = chosen.profile.id;
       this.activeProfileAppliedAtMs = this.clock.now();

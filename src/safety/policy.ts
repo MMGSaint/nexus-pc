@@ -22,7 +22,7 @@ import { createHash } from 'node:crypto';
 
 import { canonicalJson } from '../core/canonical-json.js';
 import type { ControlId } from '../domain/control.js';
-import { BUILTIN_CONTROLS } from './controls.js';
+import { BUILTIN_CONTROLS, getControl } from './controls.js';
 
 export interface ThermalPreconditions {
   readonly maxCpuTemperatureC?: number;
@@ -343,13 +343,30 @@ export function narrowPolicy(base: SafetyPolicy, override: PolicyOverride | unde
 
     let range = current.range;
     if (o.range) {
-      const min = narrowNumber(current.range?.min ?? Number.NEGATIVE_INFINITY, o.range.min, 'higher-is-stricter');
-      const max = narrowNumber(current.range?.max ?? Number.POSITIVE_INFINITY, o.range.max, 'lower-is-stricter');
-      if (min.rejected) record(rejected, `controls.${id}.range.min`, current.range?.min, o.range.min);
-      if (max.rejected) record(rejected, `controls.${id}.range.max`, current.range?.max, o.range.max);
-      if (min.changed || max.changed) {
-        range = { min: min.value, max: max.value };
-        record(applied, `controls.${id}.range`, JSON.stringify(current.range ?? null), JSON.stringify(range));
+      // When the policy has no range of its own, the effective bounds are the
+      // control's own value spec. Starting from infinities instead would let a
+      // one-sided override produce a non-finite bound, which is both
+      // meaningless and unserialisable — `policyDigest` would throw and NEXUS
+      // would fail to construct its safety kernel at all.
+      const spec = getControl(id)?.valueSpec;
+      if (!spec || spec.kind !== 'integer') {
+        record(rejected, `controls.${id}.range`, 'control has no numeric range', JSON.stringify(o.range));
+      } else {
+        const base = current.range ?? { min: spec.min, max: spec.max };
+        const min = narrowNumber(base.min, o.range.min, 'higher-is-stricter');
+        const max = narrowNumber(base.max, o.range.max, 'lower-is-stricter');
+        if (min.rejected) record(rejected, `controls.${id}.range.min`, base.min, o.range.min);
+        if (max.rejected) record(rejected, `controls.${id}.range.max`, base.max, o.range.max);
+        if (min.changed || max.changed) {
+          if (min.value > max.value) {
+            // An override that inverts the bounds would permit nothing at all,
+            // which is stricter than intended but silently confusing. Refuse it.
+            record(rejected, `controls.${id}.range`, JSON.stringify(base), JSON.stringify(o.range));
+          } else {
+            range = { min: min.value, max: max.value };
+            record(applied, `controls.${id}.range`, JSON.stringify(current.range ?? base), JSON.stringify(range));
+          }
+        }
       }
     }
 

@@ -123,6 +123,50 @@ describe('narrowPolicy', () => {
     expect(rejected.some((r) => r.path === 'controls.invented.control')).toBe(true);
   });
 
+  it('never produces a non-finite bound from a one-sided override', () => {
+    // Regression: an override giving only a min for a control with no base
+    // range used to produce max: Infinity, which made policyDigest throw and
+    // stopped the safety kernel being constructible at all.
+    for (const control of BUILTIN_CONTROLS) {
+      for (const side of [{ min: 1 }, { max: 1 }, { min: 1, max: 50 }]) {
+        const { policy } = narrowPolicy(BASE_POLICY, { controls: { [control.id]: { range: side } } });
+        const range = policy.controls[control.id]?.range;
+        if (range) {
+          expect(Number.isFinite(range.min), `${control.id} min`).toBe(true);
+          expect(Number.isFinite(range.max), `${control.id} max`).toBe(true);
+        }
+        expect(() => policyDigest(policy), `${control.id} ${JSON.stringify(side)}`).not.toThrow();
+      }
+    }
+  });
+
+  it('refuses a range override on a control that has no numeric range', () => {
+    const { policy, rejected } = narrowPolicy(BASE_POLICY, {
+      controls: { 'os.game_mode': { range: { min: 1 } } },
+    });
+    expect(policy.controls['os.game_mode']?.range).toBeUndefined();
+    expect(rejected.some((r) => r.path === 'controls.os.game_mode.range')).toBe(true);
+  });
+
+  it('bounds an override by the control value spec when the policy has no range', () => {
+    // power.pcie.aspm has a base range; power.processor.idle_disable's spec is
+    // 0..1, so an override there is clamped by the spec rather than by nothing.
+    const { policy } = narrowPolicy(BASE_POLICY, {
+      controls: { 'power.processor.idle_disable': { range: { min: 1 } } },
+    });
+    const range = policy.controls['power.processor.idle_disable']?.range;
+    expect(range?.min).toBe(1);
+    expect(Number.isFinite(range?.max ?? Number.NaN)).toBe(true);
+  });
+
+  it('refuses an override that inverts the bounds', () => {
+    const { policy, rejected } = narrowPolicy(BASE_POLICY, {
+      controls: { 'power.processor.max_state': { range: { min: 95, max: 60 } } },
+    });
+    expect(policy.controls['power.processor.max_state']?.range).toEqual({ min: 50, max: 100 });
+    expect(rejected.some((r) => r.path === 'controls.power.processor.max_state.range')).toBe(true);
+  });
+
   it('is idempotent', () => {
     const once = narrowPolicy(BASE_POLICY, { global: { maxChangesPerProposal: 2 } });
     const twice = narrowPolicy(once.policy, { global: { maxChangesPerProposal: 2 } });

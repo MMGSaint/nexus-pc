@@ -396,6 +396,51 @@ describe('crash recovery', () => {
   });
 });
 
+describe('rate limits survive a restart', () => {
+  it('carries recent applications forward from the journal', async () => {
+    const home = await tempHome();
+    const paths = resolvePaths(home);
+
+    // The runtime uses the system clock, so the staged journal record has to
+    // be stamped on the same timeline to count as recent.
+    const journal = new OperationJournal(paths, systemClock, 'old');
+    const record = await journal.record('op_recent', 'prop_recent', ['power.processor.min_state']);
+    if (!record.ok) throw record.error;
+    await journal.advance(record.value, 'committed', 'kept', {
+      appliedControls: ['power.processor.min_state'],
+    });
+
+    const runtime = await makeRuntime(home);
+    await runtime.start();
+    await runtime.waitUntilInitialized();
+
+    // The cooldown must still apply after the restart, not be silently reset.
+    const recovery = runtime.health().stages.find((s) => s.stage === 'recovery');
+    expect(recovery?.detail).toContain('Carried 1 recent change');
+    await runtime.shutdown('test');
+  });
+
+  it('ignores applications older than the rate-limit window', async () => {
+    const home = await tempHome();
+    const paths = resolvePaths(home);
+    // Stamped two hours in the past, well outside the rate-limit window.
+    const stale = new FixedClock(Date.now() - 7_200_000);
+    const journal = new OperationJournal(paths, stale, 'old');
+    const record = await journal.record('op_old', 'prop_old', ['power.processor.min_state']);
+    if (!record.ok) throw record.error;
+    await journal.advance(record.value, 'committed', 'kept', {
+      appliedControls: ['power.processor.min_state'],
+    });
+
+    const runtime = await makeRuntime(home);
+    await runtime.start();
+    await runtime.waitUntilInitialized();
+    const recovery = runtime.health().stages.find((s) => s.stage === 'recovery');
+    expect(recovery?.detail).not.toContain('Carried');
+    await runtime.shutdown('test');
+  });
+});
+
 describe('graceful shutdown', () => {
   it('completes and marks the session clean', async () => {
     const home = await tempHome();
