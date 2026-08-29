@@ -167,6 +167,15 @@ describe('narrowPolicy', () => {
     expect(rejected.some((r) => r.path === 'controls.power.processor.max_state.range')).toBe(true);
   });
 
+  it('reports an inherited property name as an unknown control', () => {
+    const { policy, rejected } = narrowPolicy(BASE_POLICY, {
+      controls: { toString: { allowed: false as const }, constructor: { allowed: false as const } },
+    });
+    expect(policy.controls['toString']).toBeUndefined();
+    expect(rejected.some((r) => r.path === 'controls.toString')).toBe(true);
+    expect(rejected.some((r) => r.path === 'controls.constructor')).toBe(true);
+  });
+
   it('is idempotent', () => {
     const once = narrowPolicy(BASE_POLICY, { global: { maxChangesPerProposal: 2 } });
     const twice = narrowPolicy(once.policy, { global: { maxChangesPerProposal: 2 } });

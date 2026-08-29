@@ -200,8 +200,19 @@ const BASE_CONTROL_POLICIES: readonly ControlPolicy[] = [
   },
 ];
 
+/**
+ * Control tables are keyed by data, so they are built with a null prototype.
+ * A plain object would answer `controls['toString']` with a function inherited
+ * from Object.prototype — harmless here because the kernel checks
+ * `policy.allowed` and fails closed, but a lookup table whose correctness
+ * depends on that is one refactor away from being wrong.
+ */
+function emptyControlTable(): Record<ControlId, ControlPolicy> {
+  return Object.create(null) as Record<ControlId, ControlPolicy>;
+}
+
 function buildBasePolicy(): SafetyPolicy {
-  const controls: Record<ControlId, ControlPolicy> = {};
+  const controls: Record<ControlId, ControlPolicy> = emptyControlTable();
   // Every known control gets an entry so that "not configured" is explicit.
   for (const descriptor of BUILTIN_CONTROLS) {
     controls[descriptor.id] = Object.freeze({
@@ -330,7 +341,7 @@ export function narrowPolicy(base: SafetyPolicy, override: PolicyOverride | unde
   const requireVerification = g.requireVerification || go?.requireVerification === true;
   if (requireVerification !== g.requireVerification) record(applied, 'global.requireVerification', g.requireVerification, requireVerification);
 
-  const controls: Record<ControlId, ControlPolicy> = {};
+  const controls: Record<ControlId, ControlPolicy> = emptyControlTable();
   for (const [id, current] of Object.entries(base.controls)) {
     const o = override?.controls?.[id];
     if (!o) {
@@ -434,8 +445,10 @@ export function narrowPolicy(base: SafetyPolicy, override: PolicyOverride | unde
   }
 
   // An override naming a control that does not exist cannot create one.
+  // `Object.hasOwn` rather than `in`: the latter also matches inherited names
+  // like `toString`, which would quietly go unreported as unknown.
   for (const id of Object.keys(override?.controls ?? {})) {
-    if (!(id in base.controls)) {
+    if (!Object.hasOwn(base.controls, id)) {
       record(rejected, `controls.${id}`, 'unknown control', 'ignored');
     }
   }
