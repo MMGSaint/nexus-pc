@@ -15,7 +15,7 @@ Requirements: Node.js 20.11+ and this repository. Nothing else.
 ```powershell
 node --version      # expect v20.11 or later
 npm ci
-npm run verify      # typecheck, lint, 362 tests, build
+npm run verify      # typecheck, lint, build, full test suite
 ```
 
 `npm run verify` must pass before you go further. It proves the build is intact
