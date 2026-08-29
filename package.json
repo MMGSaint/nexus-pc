@@ -24,7 +24,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:security": "vitest run tests/security",
-    "verify": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "verify": "npm run typecheck && npm run lint && npm run build && npm run test",
     "nexus": "node --enable-source-maps dist/cli/main.js"
   },
   "dependencies": {},

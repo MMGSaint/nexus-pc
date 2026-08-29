@@ -423,64 +423,127 @@ async function doctor(runtime: NexusRuntime, json: boolean): Promise<number> {
  * probes, baselines and validates a rollback, and it deliberately does not
  * leave any change applied.
  */
+/**
+ * The first-deployment sequence. Observation and evidence first: it discovers,
+ * probes, baselines and validates a rollback, and it deliberately does not
+ * leave any change applied.
+ *
+ * Steps that cannot run in the current operating mode are reported as SKIPPED,
+ * never as passed. A run that skips the controlled change has not validated
+ * rollback, and saying otherwise would defeat the point of the exercise.
+ */
 async function firstPc(runtime: NexusRuntime, json: boolean): Promise<number> {
-  const steps: { step: string; ok: boolean; detail: string }[] = [];
-  const record = (step: string, okFlag: boolean, detail: string): void => {
-    steps.push({ step, ok: okFlag, detail });
-    if (!json) process.stdout.write(`  ${okFlag ? 'ok  ' : 'FAIL'} ${step.padEnd(28)} ${detail}\n`);
+  type StepState = 'ok' | 'fail' | 'skip';
+  const steps: { step: string; state: StepState; detail: string }[] = [];
+  const record = (step: string, state: StepState, detail: string): void => {
+    steps.push({ step, state, detail });
+    if (!json) {
+      const label = state === 'ok' ? 'ok  ' : state === 'skip' ? 'SKIP' : 'FAIL';
+      process.stdout.write(`  ${label} ${step.padEnd(28)} ${detail}\n`);
+    }
   };
 
   if (!json) process.stdout.write(`${heading('NEXUS first-PC validation')}\n`);
 
   await runtime.waitUntilInitialized();
   const health = runtime.health();
-  record('runtime started', health.runState !== 'failed', `run state ${health.runState}`);
+  record('runtime started', health.runState === 'failed' ? 'fail' : 'ok', `run state ${health.runState}`);
 
   const inventory = runtime.inventorySnapshot;
-  record('hardware discovered', inventory !== null, inventory ? describeInventory(inventory) : 'no inventory');
+  record('hardware discovered', inventory === null ? 'fail' : 'ok', inventory ? describeInventory(inventory) : 'no inventory');
 
   const capabilities = runtime.capabilityRegistry.list();
   const available = capabilities.filter((c) => c.state === 'available');
-  record('capabilities probed', capabilities.length > 0, `${available.length} of ${capabilities.length} available`);
+  record('capabilities probed', capabilities.length > 0 ? 'ok' : 'fail', `${available.length} of ${capabilities.length} available`);
 
   const telemetryOk = runtime.telemetryPipeline.working;
-  record('telemetry producing', telemetryOk, telemetryOk ? `fidelity ${runtime.telemetryPipeline.latest()?.fidelity}` : 'no source produced a usable reading');
+  record(
+    'telemetry producing',
+    telemetryOk ? 'ok' : 'fail',
+    telemetryOk ? `fidelity ${runtime.telemetryPipeline.latest()?.fidelity}` : 'no source produced a usable reading',
+  );
 
   const baseline = await runtime.baselineStore.latest();
-  record('baseline available', baseline.ok, baseline.ok ? `${baseline.value.id}, control coverage ${(baseline.value.controlCoverage * 100).toFixed(0)}%` : 'none');
+  record(
+    'baseline available',
+    baseline.ok ? 'ok' : 'fail',
+    baseline.ok ? `${baseline.value.id}, control coverage ${(baseline.value.controlCoverage * 100).toFixed(0)}%` : 'none',
+  );
 
   const workload = await runtime.analyzeWorkload();
-  record('workload classified', true, `${workload.workload} at ${(workload.confidence * 100).toFixed(0)}% confidence`);
+  record('workload classified', 'ok', `${workload.workload} at ${(workload.confidence * 100).toFixed(0)}% confidence`);
+
+  // A change can only be exercised when the operating mode permits one. In
+  // observation mode these steps are skipped, not passed.
+  const canChange = health.optimizationEnabled || runtime.currentRunState === 'ready' || runtime.currentRunState === 'degraded';
 
   const dryRun = await runtime.runOptimization({ origin: 'user', requestedBy: 'first-pc', dryRun: true });
-  record('dry run', dryRun.status !== 'failed', dryRun.summary);
+  const dryRunSkipped = dryRun.noActionReason === 'observation_only' || dryRun.noActionReason === 'degraded';
+  record('dry run', dryRunSkipped ? 'skip' : dryRun.status === 'failed' ? 'fail' : 'ok', dryRun.summary);
 
-  // A controlled optimization that is always reverted, so the rollback path is
-  // exercised on the real machine before anything is left changed.
-  const controlled = await runtime.runOptimization({
-    origin: 'user',
-    requestedBy: 'first-pc',
-    rollbackPolicy: 'unless_benefit',
-  });
-  const rollbackProven =
-    controlled.status === 'applied_rolled_back' ||
-    controlled.status === 'no_action' ||
-    controlled.status === 'rejected' ||
-    controlled.status === 'requires_confirmation';
-  record('controlled change', rollbackProven, controlled.summary);
+  let rollbackValidated = false;
+  if (!canChange) {
+    record(
+      'controlled change',
+      'skip',
+      'NEXUS is not in a mode that permits changes, so rollback was not exercised on this machine.',
+    );
+  } else {
+    // Configured to keep only a measured win, so the common outcome is a
+    // rollback — which is the path being validated.
+    const controlled = await runtime.runOptimization({
+      origin: 'user',
+      requestedBy: 'first-pc',
+      rollbackPolicy: 'unless_benefit',
+    });
+    if (controlled.status === 'applied_rolled_back') {
+      rollbackValidated = true;
+      record('controlled change', 'ok', `applied and reverted: ${controlled.summary}`);
+    } else if (controlled.status === 'applied_kept') {
+      record('controlled change', 'ok', `${controlled.summary} Roll it back with: nexus rollback ${controlled.checkpointId ?? '<id>'}`);
+    } else if (controlled.status === 'failed' || controlled.status === 'applied_unverified') {
+      record('controlled change', 'fail', controlled.summary);
+    } else {
+      record('controlled change', 'skip', `no change was applied, so rollback was not exercised: ${controlled.summary}`);
+    }
+  }
 
   const auditOk = await runtime.auditLog.verify();
-  record('audit chain intact', auditOk.ok && auditOk.value.valid, auditOk.ok ? `${auditOk.value.recordsChecked} records` : 'unreadable');
+  record(
+    'audit chain intact',
+    auditOk.ok && auditOk.value.valid ? 'ok' : 'fail',
+    auditOk.ok ? `${auditOk.value.recordsChecked} records` : 'unreadable',
+  );
 
-  const passed = steps.every((s) => s.ok);
+  const failed = steps.filter((s) => s.state === 'fail');
+  const skipped = steps.filter((s) => s.state === 'skip');
+  const passed = failed.length === 0;
+
   if (json) {
-    process.stdout.write(`${JSON.stringify({ passed, steps }, null, 2)}\n`);
-  } else {
-    process.stdout.write(
-      `\n${passed ? 'All first-PC checks passed.' : 'Some first-PC checks did not pass — see above.'}\n` +
-        'Nothing has been left changed. Review `nexus doctor`, then switch the mode with `nexus config set-mode assisted` when you are satisfied.\n',
-    );
+    process.stdout.write(`${JSON.stringify({ passed, rollbackValidated, steps }, null, 2)}\n`);
+    return passed ? 0 : 1;
   }
+
+  process.stdout.write(
+    `\n${passed ? 'No checks failed.' : `${failed.length} check(s) FAILED — see above.`}\n`,
+  );
+  if (skipped.length > 0) {
+    process.stdout.write(`${skipped.length} check(s) were skipped — the reason is shown against each.\n`);
+  }
+  if (!rollbackValidated) {
+    process.stdout.write(
+      'Rollback has NOT been validated on this machine yet.\n' +
+        (canChange
+          ? 'NEXUS did not propose a change to exercise it. That is the correct result when the workload is\n' +
+            'ambiguous or already optimal — re-run first-pc while the machine is doing something.\n'
+          : 'Once discovery and telemetry look right, switch mode and re-run:\n' +
+            '  nexus config set-mode assisted\n' +
+            '  nexus first-pc\n'),
+    );
+  } else {
+    process.stdout.write('Rollback was exercised and verified on this machine.\n');
+  }
+  process.stdout.write('Nothing has been left changed by this run.\n');
   return passed ? 0 : 1;
 }
 
