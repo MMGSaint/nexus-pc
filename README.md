@@ -12,7 +12,7 @@ until a human says otherwise.
 
 ```
 npm ci
-npm run verify          # typecheck, lint, 345 tests, build
+npm run verify          # typecheck, lint, 362 tests, build
 node dist/cli/main.js doctor
 ```
 

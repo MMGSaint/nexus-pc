@@ -68,15 +68,24 @@ while ($true) {
   if ($null -eq $line) { break }
   $line = $line.Trim()
   if ($line -eq 'exit') { break }
+
+  # Each request carries an id, echoed on the reply. Every path below answers
+  # exactly once: a command that produced no line would desynchronise nothing
+  # now, but it would still leave the caller waiting for its deadline.
+  $parts = $line.Split(' ', 2)
+  $id = $parts[0]
+  $command = if ($parts.Length -gt 1) { $parts[1] } else { '' }
+
   $payload = $null
   try {
-    if ($line -eq 'telemetry') { $payload = Get-NexusTelemetry }
+    if ($command -eq 'telemetry') { $payload = Get-NexusTelemetry }
     else { $payload = @{ error = 'unknown command' } }
   } catch {
     $payload = @{ error = $_.Exception.Message }
   }
+  if ($null -eq $payload) { $payload = @{ error = 'no data' } }
   $json = ConvertTo-Json -InputObject $payload -Depth 4 -Compress
-  [Console]::Out.WriteLine("NEXUSJSON $json")
+  [Console]::Out.WriteLine("NEXUSJSON $id $json")
 }
 `;
 

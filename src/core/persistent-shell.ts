@@ -7,9 +7,16 @@
  * NEXUS a net negative on its own terms. So the host is started once and
  * driven over stdin/stdout with a line protocol.
  *
- * Protocol: NEXUS writes one command name per line. The host replies with
- * exactly one line per command, `NEXUSJSON <compact json>`. A `NEXUSREADY`
- * line signals that the host has finished loading.
+ * Protocol: NEXUS writes `<id> <command>` per line, and the host replies
+ * `NEXUSJSON <id> <compact json>`. A `NEXUSREADY` line signals that the host
+ * has finished loading.
+ *
+ * The id matters. Matching replies to requests by *order* looks simpler and is
+ * wrong: a host that skips a reply — because a command errored in a way that
+ * produced no output, or because it was killed mid-answer — silently shifts
+ * every later response onto the wrong caller, and telemetry starts being
+ * attributed to whatever was asked next. Correlating explicitly means a
+ * missing reply fails only its own request.
  *
  * The host is restarted on failure with bounded attempts and backoff — never
  * in an unbounded loop.
@@ -49,6 +56,8 @@ export interface PersistentShellOptions {
 }
 
 interface Pending {
+  readonly id: string;
+  readonly command: string;
   readonly resolve: (value: Result<unknown, NexusError>) => void;
   readonly timer: NodeJS.Timeout;
 }
@@ -59,7 +68,8 @@ export class PersistentShell {
   private buffer = '';
   private ready = false;
   private readyWaiters: ((r: Result<true, NexusError>) => void)[] = [];
-  private queue: Pending[] = [];
+  private readonly pending = new Map<string, Pending>();
+  private nextRequestId = 1;
   private restarts: number[] = [];
   private stopped = false;
   private starting: Promise<Result<true, NexusError>> | null = null;
@@ -151,20 +161,31 @@ export class PersistentShell {
     if (!child || !this.ready) return err(nexusError('E_UNAVAILABLE', 'sensor host is not ready'));
 
     return new Promise<Result<unknown, NexusError>>((resolve) => {
+      const id = String(this.nextRequestId);
+      this.nextRequestId += 1;
+
       const timer = setTimeout(() => {
-        this.dequeue(entry)?.resolve(err(nexusError('E_TIMEOUT', `sensor host did not answer "${command}" in time`)));
-        // A host that stops answering is restarted rather than trusted again.
+        // A host that misses a deadline is not trusted again: it is killed,
+        // and every outstanding request fails rather than waiting on a process
+        // that has stopped answering.
+        this.pending.delete(id);
+        resolve(err(nexusError('E_TIMEOUT', `sensor host did not answer "${command}" in time`)));
+        this.failAllPending(nexusError('E_TIMEOUT', 'sensor host was restarted after a timeout'));
         this.kill();
       }, timeoutMs ?? this.options.requestTimeoutMs);
       timer.unref?.();
 
-      const entry: Pending = { resolve, timer };
-      this.queue.push(entry);
+      this.pending.set(id, { id, command, resolve, timer });
 
       try {
-        child.stdin.write(`${command}\n`);
+        child.stdin.write(`${id} ${command}\n`);
       } catch (e) {
-        this.dequeue(entry)?.resolve(err(toNexusError(e, 'E_IO')));
+        const entry = this.pending.get(id);
+        if (entry) {
+          this.pending.delete(id);
+          clearTimeout(entry.timer);
+          entry.resolve(err(toNexusError(e, 'E_IO')));
+        }
       }
     });
   }
@@ -186,6 +207,11 @@ export class PersistentShell {
     const child = this.child;
     this.child = null;
     this.ready = false;
+    // Detach before killing: a response still buffered on the old stream must
+    // not be matched against a request queued after the restart.
+    child?.stdout?.removeAllListeners('data');
+    child?.stderr?.removeAllListeners('data');
+    this.buffer = '';
     if (child) {
       try {
         child.kill();
@@ -223,23 +249,32 @@ export class PersistentShell {
     }
     if (!line.startsWith(JSON_PREFIX)) return;
 
-    const entry = this.queue.shift();
+    const body = line.slice(JSON_PREFIX.length);
+    const space = body.indexOf(' ');
+    if (space < 0) return;
+    const id = body.slice(0, space);
+
+    // A reply for an id we are not waiting on is discarded, not guessed at.
+    const entry = this.pending.get(id);
     if (!entry) return;
+    this.pending.delete(id);
     clearTimeout(entry.timer);
 
     try {
-      entry.resolve(ok(JSON.parse(line.slice(JSON_PREFIX.length))));
+      entry.resolve(ok(JSON.parse(body.slice(space + 1))));
     } catch (e) {
       entry.resolve(err(nexusError('E_IO', 'sensor host produced invalid JSON', undefined, e)));
     }
   }
 
-  private dequeue(entry: Pending): Pending | null {
-    const index = this.queue.indexOf(entry);
-    if (index < 0) return null;
-    this.queue.splice(index, 1);
-    clearTimeout(entry.timer);
-    return entry;
+  /** Fail every outstanding request and clear the table. */
+  private failAllPending(error: NexusError): void {
+    const outstanding = [...this.pending.values()];
+    this.pending.clear();
+    for (const entry of outstanding) {
+      clearTimeout(entry.timer);
+      entry.resolve(err(error));
+    }
   }
 
   private failStartup(error: NexusError): void {
@@ -253,11 +288,6 @@ export class PersistentShell {
     this.ready = false;
     this.child = null;
     this.failStartup(error);
-    const queued = this.queue;
-    this.queue = [];
-    for (const entry of queued) {
-      clearTimeout(entry.timer);
-      entry.resolve(err(error));
-    }
+    this.failAllPending(error);
   }
 }
