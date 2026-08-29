@@ -33,6 +33,9 @@ document does not pretend otherwise.
 | Optimizer output cannot grant itself authority | No authority field exists on any type; unknown fields rejected at the boundary; `scanForAuthorityClaims` as defence in depth; controls cannot be invented | `tests/security` |
 | Rollback cannot cross its scope | A restore may only write controls its checkpoint captured; ids are pattern-validated | `tests/security`, `tests/checkpoint` |
 | Startup/recovery cannot bypass safety | Writes refused in every run state except `ready`/`degraded`; unresolved recovery forces observation-only | `tests/security` |
+| Rollback cannot route around the kernel | Restores are gated by `evaluateRollback`: observation-only refuses all, non-human origins refuse while observation-only, prohibited controls refuse even to restore | `tests/security`, `tests/integration` |
+| Concurrent requests cannot race the rate limit | One optimization at a time; a second concurrent request is refused rather than queued | `tests/integration` |
+| Pruning the audit log cannot hide a deletion | A pruning anchor records where the surviving chain starts; a record removed from the front no longer matches it | `tests/audit` |
 | Configuration cannot disable safety | `narrowPolicy` can only shrink; one-way switches are literals in the schema so widening fails to parse | `tests/safety`, `tests/security` |
 
 ## Process execution

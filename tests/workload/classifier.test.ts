@@ -140,6 +140,35 @@ describe('Vesper context hints', () => {
     expect(result.declaredContext?.declaredBy).toBe('vesper');
   });
 
+  it('cannot lift confidence past the cap that missing signals imposed', () => {
+    // Three signals missing caps confidence well below the action floor. An
+    // agreeing hint corroborates; it does not supply the missing evidence, so
+    // it must not push the classification back over the floor.
+    const starved = signals({
+      cpuUtilization: null,
+      gpuUtilization: null,
+      vramUsedBytes: null,
+      vramTotalBytes: null,
+    });
+    const result = classifier.classify(starved, { ...hint, workload: 'unknown' });
+    expect(result.confidence).toBeLessThan(MIN_ACTIONABLE_CONFIDENCE);
+    expect(isActionable(result)).toBe(false);
+  });
+
+  it('cannot lift confidence past the cap that non-live signals imposed', () => {
+    const mocked = signals({
+      cpuUtilization: 30,
+      gpuUtilization: 96,
+      fidelity: 'mocked',
+      processes: [{ name: 'obs64.exe', pid: 1, cpuPercent: 20, workingSetBytes: null, isForeground: false }],
+    });
+    const withHint = classifier.classify(mocked, hint);
+    // Agreement raises nothing above the 0.5 ceiling that mocked signals carry,
+    // so a simulation plus a hint still cannot authorise a change.
+    expect(withHint.confidence).toBeLessThanOrEqual(0.5);
+    expect(isActionable(withHint)).toBe(false);
+  });
+
   it('ignores an expired hint', () => {
     const stale = { ...hint, declaredAtMs: T0 - 3_600_000, ttlMs: 60_000 };
     expect(hintIsFresh(stale, T0)).toBe(false);

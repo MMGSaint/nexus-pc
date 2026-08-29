@@ -31,6 +31,8 @@ import type { Logger } from '../core/logger.js';
 import type { NexusPaths } from '../core/paths.js';
 import type { Result } from '../core/result.js';
 import { err, ok } from '../core/result.js';
+import type { Fidelity } from '../core/fidelity.js';
+import { combineFidelity } from '../core/fidelity.js';
 import {
   vArray,
   vBoolean,
@@ -95,6 +97,12 @@ export interface RestoreResult {
   readonly checkpointId: string;
   readonly complete: boolean;
   readonly entries: readonly RestoreEntryResult[];
+  /**
+   * Provenance of the restore itself — the weakest trust across the adapters
+   * that performed it. A restore carried out entirely by mock adapters is
+   * `mocked`, and must not be reported to anyone as a live hardware change.
+   */
+  readonly fidelity: Fidelity;
 }
 
 export interface CheckpointStoreOptions {
@@ -236,6 +244,7 @@ export class CheckpointStore {
 
     const wanted = only ? new Set(only) : null;
     const results: RestoreEntryResult[] = [];
+    const fidelities: Fidelity[] = [];
 
     for (const entry of checkpoint.entries) {
       if (wanted && !wanted.has(entry.control)) continue;
@@ -251,6 +260,7 @@ export class CheckpointStore {
       }
 
       const adapter: ControlAdapter | undefined = this.options.registry.get(entry.control);
+      if (adapter) fidelities.push(adapter.trust);
       if (!adapter) {
         results.push({
           control: entry.control,
@@ -282,7 +292,12 @@ export class CheckpointStore {
     }
 
     const complete = results.length > 0 && results.every((r) => r.restored && r.verified);
-    return ok({ checkpointId: id, complete, entries: results });
+    return ok({
+      checkpointId: id,
+      complete,
+      entries: results,
+      fidelity: fidelities.length === 0 ? 'unavailable' : combineFidelity(...fidelities),
+    });
   }
 
   private file(id: string): string {

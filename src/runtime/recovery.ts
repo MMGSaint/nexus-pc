@@ -117,10 +117,27 @@ async function reconcile(record: OperationRecord, options: RecoveryOptions): Pro
     };
   }
 
-  // Restore exactly what was written — not the whole checkpoint. A control the
-  // interrupted run never reached must not be touched by the recovery either.
-  const scope = record.appliedControls.length > 0 ? record.appliedControls : undefined;
-  const restored = await options.checkpoints.restore(record.checkpointId, options.context, scope);
+  // The engine journals each control before it writes it, so an empty set is
+  // authoritative: no write was issued and there is nothing to put back.
+  // Widening to the whole checkpoint here — as this previously did — would let
+  // recovery revert controls the interrupted run never reached, including a
+  // change the user made by hand between the crash and the restart.
+  if (record.appliedControls.length === 0) {
+    await options.journal.advance(record, 'abandoned', 'interrupted before any write was issued');
+    return {
+      operationId: record.id,
+      previousStatus: record.status,
+      action: 'abandoned',
+      detail: 'The operation was interrupted before any write was issued.',
+    };
+  }
+
+  // Restore exactly what was written — not the whole checkpoint.
+  const restored = await options.checkpoints.restore(
+    record.checkpointId,
+    options.context,
+    record.appliedControls,
+  );
 
   if (!restored.ok || !restored.value.complete) {
     const detail = restored.ok

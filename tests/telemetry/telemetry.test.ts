@@ -324,6 +324,20 @@ describe('summaries', () => {
 });
 
 describe('OsMemorySource', () => {
+  it('reports memory.used as invalid rather than zero when the figures disagree', async () => {
+    // A negative "used" is impossible, so clamping it to zero would publish a
+    // fabricated measurement. It must read as unknown instead.
+    const readings = await new OsMemorySource().sample({ clock: new FixedClock(T0), logger, timeoutMs: 1000 });
+    const used = readings.find((r) => r.metric === 'memory.used');
+    expect(used).toBeDefined();
+    if (used?.status === 'ok') {
+      const total = readings.find((r) => r.metric === 'memory.total');
+      expect(used.value).toBeLessThanOrEqual(total?.value ?? Number.POSITIVE_INFINITY);
+    } else {
+      expect(used?.value).toBeNull();
+    }
+  });
+
   it('reports real memory for this host', async () => {
     const readings = await new OsMemorySource().sample({ clock: new FixedClock(T0), logger, timeoutMs: 1000 });
     const total = readings.find((r) => r.metric === 'memory.total');
@@ -336,11 +350,30 @@ describe('SelfTelemetrySource', () => {
   it('always reports its own memory and reports CPU from the second sample', async () => {
     const source = new SelfTelemetrySource();
     const context = { clock: new FixedClock(T0), logger, timeoutMs: 1000 };
+
     const first = await source.sample(context);
     expect(first.find((r) => r.metric === 'nexus.self.rss')?.status).toBe('ok');
-    expect(first.find((r) => r.metric === 'nexus.self.cpu')).toBeUndefined();
+
+    // The first sample has no interval, but the metric is still reported — as
+    // an explicit unknown, not by omission, so the gap shows up in coverage.
+    const firstCpu = first.find((r) => r.metric === 'nexus.self.cpu');
+    expect(firstCpu).toBeDefined();
+    expect(firstCpu?.value).toBeNull();
+    expect(firstCpu?.status).toBe('unavailable');
+
     const second = await source.sample(context);
     expect(second.find((r) => r.metric === 'nexus.self.cpu')?.status).toBe('ok');
+  });
+
+  it('claims every metric it declares on every sample', async () => {
+    const source = new SelfTelemetrySource();
+    const context = { clock: new FixedClock(T0), logger, timeoutMs: 1000 };
+    for (let i = 0; i < 2; i += 1) {
+      const readings = await source.sample(context);
+      for (const metric of source.metrics) {
+        expect(readings.some((r) => r.metric === metric), `sample ${i} / ${metric}`).toBe(true);
+      }
+    }
   });
 });
 

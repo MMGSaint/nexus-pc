@@ -67,7 +67,7 @@ function fakeHost(overrides: Partial<VesperHost> = {}): VesperHost {
     declareContext: async () => ({ accepted: true, note: 'recorded as context' }),
     recommend: async () => ({ workload: { fidelity: 'mocked' } }) as never,
     optimize: async () => MOCK_OUTCOME,
-    rollback: async () => ({ checkpointId: 'ckpt_1', complete: true, entries: [] }),
+    rollback: async () => ({ checkpointId: 'ckpt_1', complete: true, entries: [], fidelity: 'mocked' as const }),
     getOptimizationResult: async () => MOCK_OUTCOME,
     ...overrides,
   };
@@ -317,6 +317,31 @@ describe('context declaration', () => {
     expect(received).toMatchObject({ workload: 'streaming', declaredBy: 'vesper' });
     // A hint has a lifetime; it does not persist as a standing instruction.
     expect((received as { ttlMs: number }).ttlMs).toBeGreaterThan(0);
+  });
+});
+
+describe('rollback fidelity', () => {
+  it('reports a mock-performed rollback as mocked, not live', async () => {
+    const { client } = await startServer([...DEFAULT_SCOPES, 'rollback']);
+    const response = await client.call('rollback', TOKEN, { checkpointId: 'ckpt_1' });
+    expect(response.ok).toBe(true);
+    if (!response.ok) return;
+    // The restore completed, but mock adapters performed it.
+    expect(response.fidelity).toBe('mocked');
+    expect(response.fidelity).not.toBe('live');
+  });
+
+  it('reports an incomplete restore as unverified', async () => {
+    const { client } = await startServer(
+      [...DEFAULT_SCOPES, 'rollback'],
+      fakeHost({
+        rollback: async () => ({ checkpointId: 'ckpt_1', complete: false, entries: [], fidelity: 'live' as const }),
+      }),
+    );
+    const response = await client.call('rollback', TOKEN, { checkpointId: 'ckpt_1' });
+    expect(response.ok).toBe(true);
+    if (!response.ok) return;
+    expect(response.fidelity).toBe('unverified');
   });
 });
 

@@ -138,8 +138,14 @@ export class CapabilityRegistry {
     let fidelity = combineFidelity(probe.trust, claimed);
 
     let state = outcome.state;
-    // A provider that is not live cannot report a live-grade `available`.
-    if (state === 'available' && fidelity !== 'live') state = 'mocked';
+    /*
+     * A provider that is not live cannot report a live-grade `available`.
+     * `unverified` demotes to `unverified` rather than `mocked`: the kernel
+     * blocks on unverified and merely notes mocked, so collapsing the two
+     * would turn a fail-closed state into a fail-open one.
+     */
+    if (state === 'available' && fidelity === 'unverified') state = 'unverified';
+    else if (state === 'available' && fidelity !== 'live') state = 'mocked';
     if (state === 'mocked' && fidelity === 'live') fidelity = 'mocked';
     if (state === 'unavailable' || state === 'unsupported') fidelity = 'unavailable';
     if (state === 'unverified') fidelity = 'unverified';

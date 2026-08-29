@@ -10,6 +10,7 @@ import {
   type Harness,
 } from '../helpers/engine-harness.js';
 import { MockControlAdapter } from '../../src/optimizer/actuator.js';
+import { nexusError } from '../../src/core/errors.js';
 import { findBuiltinProfile } from '../../src/profiles/builtin.js';
 import { SafetyKernel } from '../../src/safety/kernel.js';
 import { BASE_POLICY, narrowPolicy } from '../../src/safety/policy.js';
@@ -301,6 +302,34 @@ describe('execute — rollback paths', () => {
     expect(parking.current).toBe(10);
   });
 
+  it('reverts a write that landed even though it reported failure', async () => {
+    harness = await makeHarness();
+    const adapter = new LandsThenFailsAdapter();
+    harness.registry.register(adapter);
+
+    const result = await harness.engine.execute(proposal(), environment(), harness.actuatorContext);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // The write changed the machine before erroring, so it must be reverted
+    // and must not be described as having changed nothing.
+    expect(adapter.current).toBe(5);
+    expect(result.value.summary).not.toContain('Nothing had been changed');
+    expect(result.value.status).toBe('applied_rolled_back');
+  });
+
+  it('journals a control before writing it, so a crash mid-write is recoverable', async () => {
+    harness = await makeHarness();
+    const { min } = registerPowerAdapters(harness.registry);
+    void min;
+    await harness.engine.execute(proposal(), environment(), harness.actuatorContext);
+
+    const operations = await harness.journal.list();
+    // The terminal record still carries the control, which is what recovery
+    // reads to decide what to put back.
+    expect(operations[0]?.appliedControls).toContain('power.processor.min_state');
+  });
+
   it('reports applied_unverified when the rollback itself cannot be confirmed', async () => {
     harness = await makeHarness();
     const adapter = new RollbackResistantAdapter();
@@ -376,6 +405,38 @@ describe('noAction', () => {
     expect(outcome.appliedChanges).toHaveLength(0);
   });
 });
+
+/**
+ * Applies the value and then reports failure — the powercfg case where the
+ * setting is persisted but re-activating the scheme fails. The machine has
+ * changed; the caller was told the write did not succeed.
+ */
+class LandsThenFailsAdapter extends MockControlAdapter {
+  private observed = 5;
+
+  constructor() {
+    super('power.processor.min_state', { initial: 5 });
+  }
+
+  override async read(): ReturnType<MockControlAdapter['read']> {
+    return { ok: true, value: this.observed };
+  }
+
+  override async write(
+    _context: Parameters<MockControlAdapter['write']>[0],
+    value: Parameters<MockControlAdapter['write']>[1],
+  ): ReturnType<MockControlAdapter['write']> {
+    if (typeof value === 'number') this.observed = value;
+    // Restoring the captured value must succeed, or the test would be checking
+    // the rollback-failure path instead.
+    if (value === 5) return { ok: true, value: true };
+    return { ok: false, error: nexusError('E_IO', 'scheme activation failed after the value was written') };
+  }
+
+  override get current(): number {
+    return this.observed;
+  }
+}
 
 /**
  * Applies the first write and verifies it, then silently ignores every later

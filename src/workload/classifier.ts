@@ -210,6 +210,17 @@ export class WorkloadClassifier {
         contextConflict = true;
         confidence = Math.min(confidence, 0.5);
       }
+
+      /*
+       * Re-apply the caps. They exist because signals were missing or were not
+       * live, and a hint is a claim about intent — it cannot supply evidence
+       * the observation lacks. Without this, an agreeing hint could lift a
+       * deliberately-capped 0.5 to 0.7 and push a classification back over the
+       * action floor, so Vesper's own declaration would be the only thing that
+       * authorised a change to the machine.
+       */
+      confidence = Math.min(confidence, cap);
+      if (signals.fidelity !== 'live') confidence = Math.min(confidence, 0.5);
     }
 
     const fidelity: Fidelity = combineFidelity(signals.fidelity);

@@ -154,7 +154,10 @@ export async function dispatch(
         return errResult(nexusError('E_INVALID_INPUT', 'rollback requires a checkpointId'));
       }
       const restored = await host.rollback(params.checkpointId);
-      return okResult(restored.complete ? 'live' : 'unverified', restored);
+      // The restore's own fidelity is authoritative: a rollback performed by
+      // mock adapters is `mocked`, however complete it was. An incomplete
+      // restore is `unverified` regardless of what performed it.
+      return okResult(restored.complete ? restored.fidelity : 'unverified', restored);
     }
 
     case 'getOptimizationResult': {

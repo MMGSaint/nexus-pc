@@ -144,6 +144,7 @@ export class NexusRuntime implements VesperHost {
   private readonly outcomes = new Map<string, OptimizationOutcome>();
   private readonly appliedHistory: { control: ControlId; appliedAtMs: number }[] = [];
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private optimizationInFlight = false;
   private shuttingDown = false;
   private backgroundInit: Promise<void> | null = null;
 
@@ -831,7 +832,69 @@ export class NexusRuntime implements VesperHost {
     });
   }
 
+  /** Vesper's rollback. Gated as a `vesper`-origin request. */
   async rollback(checkpointId: string): Promise<RestoreResult> {
+    return this.performRollback(checkpointId, 'vesper', this.requesterId);
+  }
+
+  /**
+   * Restore a checkpoint, through the safety kernel.
+   *
+   * Every write NEXUS performs goes through the kernel, and a rollback is a
+   * write. Calling the checkpoint store directly — as this used to — meant
+   * `observationOnly` and the run-state gate could be sidestepped by asking
+   * for a rollback rather than an optimization.
+   */
+  async performRollback(
+    checkpointId: string,
+    origin: 'user' | 'vesper' | 'internal',
+    requestedBy: string = origin,
+  ): Promise<RestoreResult> {
+    const checkpoint = await this.checkpoints.load(checkpointId);
+    if (!checkpoint.ok) {
+      await this.eventLog.append({
+        kind: 'rollback.refused',
+        severity: 'warning',
+        message: checkpoint.error.message,
+        data: { checkpointId },
+      });
+      throw checkpoint.error;
+    }
+
+    const verdict = this.safetyKernel.evaluateRollback(
+      {
+        checkpointId,
+        origin,
+        requestedBy,
+        controls: checkpoint.value.entries.filter((e) => e.restorable).map((e) => e.control),
+      },
+      {
+        nowMs: this.clock.now(),
+        runState: this.runState,
+        capabilities: this.capabilities.snapshot(),
+        telemetry: this.telemetry.latest(),
+        baselineAvailable: this.baseline !== null,
+        recentApplications: this.appliedHistory,
+        actuatorFidelity: (control) => this.registry.fidelityOf(control),
+      },
+    );
+
+    if (verdict.decision !== 'allow') {
+      const reason = verdict.findings
+        .filter((f) => f.severity === 'blocking')
+        .map((f) => f.message)
+        .join(' ');
+      await this.eventLog.append({
+        kind: 'rollback.refused',
+        severity: 'warning',
+        message: `rollback of ${checkpointId} refused: ${reason}`,
+        data: { checkpointId, origin, findings: verdict.findings.map((f) => f.code) },
+      });
+      throw nexusError('E_SAFETY_REJECTED', reason || 'the safety kernel refused this rollback', {
+        checkpointId,
+      });
+    }
+
     const restored = await this.checkpoints.restore(checkpointId, this.actuatorContext);
     if (!restored.ok) {
       await this.eventLog.append({
@@ -870,6 +933,22 @@ export class NexusRuntime implements VesperHost {
     rollbackPolicy?: ExecutionEnvironment['rollbackPolicy'];
   }): Promise<OptimizationOutcome> {
     const workload = await this.analyzeWorkload();
+
+    /*
+     * One at a time. Cooldowns and the hourly rate limit are evaluated against
+     * a history that is only appended to once an operation finishes, and an
+     * operation spends its measurement window awaiting. Two concurrent
+     * requests would therefore both read an empty history and both be
+     * permitted, and the second would checkpoint the value the first had just
+     * written — so an out-of-order rollback would restore the wrong state.
+     */
+    if (this.optimizationInFlight) {
+      return this.engine.noAction(
+        'cooldown',
+        'Another optimization is already running. NEXUS applies one change at a time so that measurement and rollback stay meaningful.',
+        workload,
+      );
+    }
 
     if (this.options.config.mode === 'observation') {
       return this.engine.noAction(
@@ -962,24 +1041,29 @@ export class NexusRuntime implements VesperHost {
     }
 
     const beforeSummary = summarize(this.telemetry.history(60_000));
-    const executed = await this.engine.execute(
-      proposal,
-      {
-        runState: this.runState,
-        capabilities: this.capabilities.snapshot(),
-        telemetry: this.telemetry.latest(),
-        baselineAvailable: this.baseline !== null,
-        recentApplications: this.appliedHistory,
-        workload,
-        beforeSummary,
-        measureAfter: async (windowMs) => summarize(this.telemetry.history(windowMs)),
-        onMeasurementWindow: (windowMs) => this.telemetry.enterOptimizationMode(windowMs),
-        ...(request.rollbackPolicy === undefined ? {} : { rollbackPolicy: request.rollbackPolicy }),
-      },
-      this.actuatorContext,
-    );
-
-    this.telemetry.exitOptimizationMode();
+    this.optimizationInFlight = true;
+    let executed;
+    try {
+      executed = await this.engine.execute(
+        proposal,
+        {
+          runState: this.runState,
+          capabilities: this.capabilities.snapshot(),
+          telemetry: this.telemetry.latest(),
+          baselineAvailable: this.baseline !== null,
+          recentApplications: this.appliedHistory,
+          workload,
+          beforeSummary,
+          measureAfter: async (windowMs) => summarize(this.telemetry.history(windowMs)),
+          onMeasurementWindow: (windowMs) => this.telemetry.enterOptimizationMode(windowMs),
+          ...(request.rollbackPolicy === undefined ? {} : { rollbackPolicy: request.rollbackPolicy }),
+        },
+        this.actuatorContext,
+      );
+    } finally {
+      this.optimizationInFlight = false;
+      this.telemetry.exitOptimizationMode();
+    }
 
     if (!executed.ok) {
       return this.engine.noAction('unsafe', executed.error.message, workload);
@@ -1048,9 +1132,10 @@ export class NexusRuntime implements VesperHost {
     });
 
     await deadline('telemetry', () => this.telemetry.stop());
+    const vesper = this.vesper;
+    this.vesper = null;
     await deadline('vesper', async () => {
-      if (this.vesper) await this.vesper.stop();
-      this.vesper = null;
+      if (vesper) await vesper.stop();
     });
     await deadline('audit', async () => {
       await this.eventLog.append({

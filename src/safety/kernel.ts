@@ -27,6 +27,7 @@ import type { RunState } from '../domain/health.js';
 import type {
   OptimizationProposal,
   ProposedChange,
+  RequestOrigin,
   SafetyFinding,
   SafetyVerdict,
 } from '../domain/optimization.js';
@@ -77,6 +78,78 @@ export class SafetyKernel {
   /** Read-only view of the effective policy, for health and audit output. */
   get effectivePolicy(): SafetyPolicy {
     return this.policy;
+  }
+
+  /**
+   * Gate a checkpoint restore.
+   *
+   * Restoring is a write, so it goes through the kernel like any other write —
+   * previously it did not, which meant `observationOnly` and the run-state gate
+   * could both be routed around by asking for a rollback instead of an
+   * optimization.
+   *
+   * It is deliberately gated *differently* from an optimization rather than
+   * identically: putting a setting back is the safe direction, so it stays
+   * available while NEXUS is degraded or observation-only, and it is not
+   * subject to cooldowns or the hourly rate limit — those exist to stop a
+   * control being churned, and refusing a revert because of them would be
+   * precisely the wrong answer. What it is not exempt from is the absolute
+   * switches: `observationOnly`, and the rule that only a human can write
+   * while NEXUS is not accepting optimizations.
+   */
+  evaluateRollback(request: RollbackRequest, context: SafetyContext): SafetyVerdict {
+    const findings: SafetyFinding[] = [];
+    const block = (code: string, message: string, control?: ControlId): void => {
+      findings.push(control === undefined
+        ? { code, severity: 'blocking', message }
+        : { code, severity: 'blocking', message, control });
+    };
+
+    const authority = scanForAuthorityClaims(request);
+    if (!authority.clean) {
+      block('AUTHORITY_CLAIM_PRESENT', 'Rollback request contains fields that assert privilege.');
+    }
+
+    if (this.policy.global.observationOnly) {
+      block('OBSERVATION_ONLY', 'NEXUS is configured observation-only; it will not write to this machine at all.');
+    }
+
+    if (!RUN_STATES_PERMITTING_ROLLBACK.has(context.runState)) {
+      block('RUNTIME_NOT_READY', `NEXUS run state is "${context.runState}"; a rollback cannot be performed.`);
+    } else if (context.runState === 'observation_only' && request.origin !== 'user') {
+      // A human may revert while NEXUS is observing. An orchestrator may not:
+      // observation mode means NEXUS does not act on anyone else's say-so.
+      block(
+        'ORIGIN_NOT_PERMITTED',
+        `NEXUS is observation-only; a ${request.origin} request cannot write to this machine. A rollback asked for directly by the user is still permitted.`,
+      );
+    }
+
+    if (request.controls.length === 0) {
+      block('EMPTY_ROLLBACK', 'The checkpoint captured no restorable control.');
+    }
+
+    for (const control of request.controls) {
+      const descriptor = getControl(control);
+      if (!descriptor) {
+        block('CONTROL_UNKNOWN', `Checkpoint refers to "${control}", which is not a control NEXUS knows about.`, control);
+        continue;
+      }
+      if (descriptor.safetyClass === 'prohibited') {
+        block('CONTROL_PROHIBITED', `"${descriptor.name}" is prohibited and cannot be written, even to restore it.`, control);
+      } else if (descriptor.access !== 'read-write') {
+        block('CONTROL_READ_ONLY', `"${descriptor.name}" is read-only.`, control);
+      }
+    }
+
+    const blocking = findings.filter((f) => f.severity === 'blocking');
+    return {
+      decision: blocking.length > 0 ? 'reject' : 'allow',
+      findings,
+      permitted: [],
+      evaluatedAtMs: context.nowMs,
+      policyDigest: this.digest,
+    };
   }
 
   evaluate(proposal: OptimizationProposal, context: SafetyContext): SafetyVerdict {
@@ -402,6 +475,25 @@ export class SafetyKernel {
     return findings;
   }
 }
+
+export interface RollbackRequest {
+  readonly checkpointId: string;
+  readonly origin: RequestOrigin;
+  readonly requestedBy: string;
+  /** Controls the checkpoint captured, i.e. the maximum scope of the restore. */
+  readonly controls: readonly ControlId[];
+}
+
+/** Run states in which a human may restore a checkpoint. */
+const RUN_STATES_PERMITTING_ROLLBACK: ReadonlySet<RunState> = new Set<RunState>([
+  'ready',
+  'degraded',
+  // Rollback is the corrective action, so it has to remain available exactly
+  // when NEXUS has stopped trusting itself. Refusing here would strand the
+  // machine in a state NEXUS created and cannot undo.
+  'observation_only',
+  'recovering',
+]);
 
 function confirmationCovers(proposal: OptimizationProposal, control: ControlId): boolean {
   const c = proposal.confirmation;

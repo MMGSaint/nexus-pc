@@ -6,7 +6,7 @@
  */
 
 import type { MetricId, Reading } from '../../domain/telemetry.js';
-import { reading } from '../../domain/telemetry.js';
+import { reading, unknownReading } from '../../domain/telemetry.js';
 import type { SampleContext, TelemetrySource } from '../source.js';
 
 export class SelfTelemetrySource implements TelemetrySource {
@@ -29,6 +29,22 @@ export class SelfTelemetrySource implements TelemetrySource {
         fidelity: 'live',
       }),
     ];
+
+    // The first sample has no interval to compare against. Emitting an
+    // explicit unknown rather than omitting the metric keeps the gap visible
+    // in coverage, which is the whole point of tracking coverage.
+    if (this.lastUsage === null || this.lastMs === null) {
+      out.push(
+        unknownReading({
+          metric: 'nexus.self.cpu',
+          timestampMs: nowMs,
+          source: this.id,
+          status: 'unavailable',
+          note: 'awaiting a second sample; a rate needs an interval',
+          fidelity: 'live',
+        }),
+      );
+    }
 
     if (this.lastUsage !== null && this.lastMs !== null) {
       const delta = process.cpuUsage(this.lastUsage);

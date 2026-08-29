@@ -27,7 +27,7 @@ import { canonicalJson } from '../core/canonical-json.js';
 import type { Clock } from '../core/clock.js';
 import type { NexusError } from '../core/errors.js';
 import { nexusError } from '../core/errors.js';
-import { appendLine, ensureDir, fileSize, listFiles, readText, removeFile } from '../core/fsx.js';
+import { appendLine, ensureDir, fileSize, listFiles, readJson, readText, removeFile, writeJson } from '../core/fsx.js';
 import type { Logger } from '../core/logger.js';
 import type { NexusPaths } from '../core/paths.js';
 import { redact, scrubString } from '../core/redact.js';
@@ -35,9 +35,35 @@ import type { Result } from '../core/result.js';
 import { err, ok } from '../core/result.js';
 import type { AuditEvent, AuditEventInput, EventSeverity } from '../domain/events.js';
 import { GENESIS_HASH } from '../domain/events.js';
+import { vNumber, vObject, vString } from '../core/validate.js';
 
 const SEGMENT_PREFIX = 'events-';
 const SEGMENT_SUFFIX = '.jsonl';
+const ANCHOR_FILE = 'chain-anchor.json';
+
+/**
+ * Where the surviving chain starts after pruning.
+ *
+ * Verification used to assume the log began at sequence 1 with the genesis
+ * hash. Once pruning removed the first segment that assumption was false
+ * forever: the oldest surviving record has a higher sequence and a real
+ * previous-hash, so every subsequent verify reported the chain broken — which
+ * would degrade NEXUS permanently on a long-lived installation.
+ *
+ * Recording where the log now starts keeps verification honest in both
+ * directions: continuity is still checked from the anchor onward, and a record
+ * deleted from the front no longer passes silently, because it would no longer
+ * match the anchor.
+ */
+const anchorSchema = vObject({
+  seq: vNumber({ integer: true, min: 1 }),
+  prevHash: vString({ minLength: 64, maxLength: 64 }),
+});
+
+export interface ChainAnchor {
+  readonly seq: number;
+  readonly prevHash: string;
+}
 
 export interface EventLogOptions {
   readonly paths: NexusPaths;
@@ -200,19 +226,30 @@ export class EventLog {
     return ok(limit === undefined ? out : out.slice(-limit));
   }
 
+  private get anchorPath(): string {
+    return path.join(this.dir, ANCHOR_FILE);
+  }
+
+  async readAnchor(): Promise<ChainAnchor | null> {
+    const parsed = await readJson(this.anchorPath, anchorSchema);
+    return parsed.ok ? { seq: parsed.value.seq, prevHash: parsed.value.prevHash } : null;
+  }
+
   /** Walk the chain and report the first break, if any. */
   async verify(): Promise<Result<ChainVerification, NexusError>> {
     const all = await this.readAll();
     if (!all.ok) return err(all.error);
 
-    let expectedPrev = GENESIS_HASH;
-    let expectedSeq = 1;
+    const anchor = await this.readAnchor();
+    let expectedPrev = anchor?.prevHash ?? GENESIS_HASH;
+    let expectedSeq = anchor?.seq ?? 1;
 
+    let checked = 0;
     for (const record of all.value) {
       if (record.seq !== expectedSeq) {
         return ok({
           valid: false,
-          recordsChecked: expectedSeq - 1,
+          recordsChecked: checked,
           firstBrokenSeq: record.seq,
           reason: `sequence jumped: expected ${expectedSeq}, found ${record.seq}`,
         });
@@ -220,22 +257,26 @@ export class EventLog {
       if (record.prevHash !== expectedPrev) {
         return ok({
           valid: false,
-          recordsChecked: expectedSeq - 1,
+          recordsChecked: checked,
           firstBrokenSeq: record.seq,
-          reason: 'previous-hash link does not match the preceding record',
+          reason:
+            checked === 0
+              ? 'the oldest surviving record does not match the pruning anchor; records may have been removed from the front of the log'
+              : 'previous-hash link does not match the preceding record',
         });
       }
       const { hash, ...rest } = record;
       if (hashEvent(rest) !== hash) {
         return ok({
           valid: false,
-          recordsChecked: expectedSeq - 1,
+          recordsChecked: checked,
           firstBrokenSeq: record.seq,
           reason: 'record hash does not match its contents',
         });
       }
       expectedPrev = record.hash;
       expectedSeq += 1;
+      checked += 1;
     }
 
     return ok({ valid: true, recordsChecked: all.value.length, firstBrokenSeq: null, reason: null });
@@ -268,9 +309,21 @@ export class EventLog {
     }
 
     if (removed > 0) {
+      // Re-anchor to whatever now sits at the front, so verification stays
+      // meaningful rather than reporting a permanent break.
+      await this.writeAnchor();
       this.options.logger.info('pruned audit log segments', { removed });
     }
     return ok(removed);
+  }
+
+  /** Record where the surviving chain now starts. */
+  private async writeAnchor(): Promise<void> {
+    const all = await this.readAll();
+    if (!all.ok) return;
+    const first = all.value[0];
+    if (!first) return;
+    await writeJson(this.anchorPath, { seq: first.seq, prevHash: first.prevHash }, { fsyncData: true });
   }
 
   private segmentPath(index: number): string {

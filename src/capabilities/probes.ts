@@ -248,13 +248,22 @@ export function buildCapabilityProbes(sources: () => ProbeSources): CapabilityPr
           if (!probed.ok) failures.push(`${adapter.control}: ${probed.error.message}`);
           if (adapter.trust !== 'live') trust = adapter.trust;
         }
-        if (failures.length === adapters.length) {
-          return { state: 'unavailable', detail: failures.join('; ') };
+        // Every adapter behind the capability must probe. `available` is what
+        // the safety kernel treats as proof a change is possible, so a
+        // capability that only half works must not claim it.
+        if (failures.length > 0) {
+          return {
+            state: 'unavailable',
+            detail:
+              failures.length === adapters.length
+                ? failures.join('; ')
+                : `only some of the controls behind this capability are usable: ${failures.join('; ')}`,
+          };
         }
         return {
           state: trust === 'live' ? 'available' : 'mocked',
           fidelity: trust,
-          detail: failures.length > 0 ? `partially available: ${failures.join('; ')}` : 'probed successfully',
+          detail: 'probed successfully',
         };
       },
     });

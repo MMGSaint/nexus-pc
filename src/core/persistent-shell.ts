@@ -140,8 +140,16 @@ export class PersistentShell {
       child.stderr.on('data', (chunk: string) => {
         this.options.logger.debug('sensor host stderr', { text: chunk.slice(0, 400) });
       });
-      child.on('error', (e) => this.onExit(toNexusError(e, 'E_UNAVAILABLE')));
-      child.on('close', () => this.onExit(nexusError('E_UNAVAILABLE', 'sensor host exited')));
+      // Both handlers check identity first. A killed child's `close` arrives
+      // asynchronously, and by then a replacement may already be starting —
+      // tearing that one down would orphan the process and reattach the old
+      // stream's state to the new child's startup.
+      child.on('error', (e) => {
+        if (this.child === child) this.onExit(toNexusError(e, 'E_UNAVAILABLE'));
+      });
+      child.on('close', () => {
+        if (this.child === child) this.onExit(nexusError('E_UNAVAILABLE', 'sensor host exited'));
+      });
     }).finally(() => {
       this.starting = null;
     });

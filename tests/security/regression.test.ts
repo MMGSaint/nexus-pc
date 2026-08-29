@@ -561,3 +561,62 @@ describe('unknown is never zero', () => {
     expect(unknown.confidence).toBe(0);
   });
 });
+
+describe('rollback is a write and goes through the kernel', () => {
+  const rollbackContext = (runState: Parameters<typeof safetyContext>[0]) => safetyContext(runState);
+
+  it('is refused entirely when the policy is observation-only', () => {
+    const observing = new SafetyKernel(narrowPolicy(BASE_POLICY, { global: { observationOnly: true } }).policy);
+    for (const origin of ['user', 'vesper', 'internal'] as const) {
+      const verdict = observing.evaluateRollback(
+        { checkpointId: 'ckpt_1', origin, requestedBy: origin, controls: ['power.processor.min_state'] },
+        rollbackContext({}),
+      );
+      expect(verdict.decision, origin).toBe('reject');
+      expect(blocking(verdict)).toContain('OBSERVATION_ONLY');
+    }
+  });
+
+  it('refuses a Vesper rollback while NEXUS is observation-only', () => {
+    const verdict = kernel.evaluateRollback(
+      { checkpointId: 'ckpt_1', origin: 'vesper', requestedBy: 'vesper', controls: ['power.processor.min_state'] },
+      rollbackContext({ runState: 'observation_only' }),
+    );
+    expect(verdict.decision).toBe('reject');
+    expect(blocking(verdict)).toContain('ORIGIN_NOT_PERMITTED');
+  });
+
+  it('still permits a human rollback while observation-only, because reverting is the safe direction', () => {
+    const verdict = kernel.evaluateRollback(
+      { checkpointId: 'ckpt_1', origin: 'user', requestedBy: 'cli', controls: ['power.processor.min_state'] },
+      rollbackContext({ runState: 'observation_only' }),
+    );
+    expect(verdict.decision).toBe('allow');
+  });
+
+  it('refuses a rollback while NEXUS is stopping or failed', () => {
+    for (const runState of ['initializing', 'stopping', 'stopped', 'failed'] as const) {
+      const verdict = kernel.evaluateRollback(
+        { checkpointId: 'ckpt_1', origin: 'user', requestedBy: 'cli', controls: ['power.processor.min_state'] },
+        rollbackContext({ runState }),
+      );
+      expect(verdict.decision, runState).toBe('reject');
+    }
+  });
+
+  it('refuses to write a control that is now prohibited, even to restore it', () => {
+    const verdict = kernel.evaluateRollback(
+      { checkpointId: 'ckpt_1', origin: 'user', requestedBy: 'cli', controls: ['gpu.tuning.core_clock_offset'] },
+      rollbackContext({}),
+    );
+    expect(blocking(verdict)).toContain('CONTROL_PROHIBITED');
+  });
+
+  it('refuses a checkpoint with nothing restorable in it', () => {
+    const verdict = kernel.evaluateRollback(
+      { checkpointId: 'ckpt_1', origin: 'user', requestedBy: 'cli', controls: [] },
+      rollbackContext({}),
+    );
+    expect(blocking(verdict)).toContain('EMPTY_ROLLBACK');
+  });
+});

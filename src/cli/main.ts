@@ -290,7 +290,7 @@ async function runCommand(
         return 2;
       }
       try {
-        const restored = await runtime.rollback(id);
+        const restored = await runtime.performRollback(id, 'user', 'cli');
         out(
           restored,
           [

@@ -41,10 +41,25 @@ export class OsMemorySource implements TelemetrySource {
     const make = (metric: MetricId, value: number): Reading =>
       reading({ metric, value, timestampMs: nowMs, source: this.id, fidelity: 'live' });
 
-    return [
-      make('memory.total', total),
-      make('memory.available', available),
-      make('memory.used', Math.max(0, total - available)),
-    ];
+    const readings = [make('memory.total', total), make('memory.available', available)];
+
+    // Clamping would publish `used = 0` as a real measurement when the two
+    // figures disagree. An impossible pair means one of them is wrong, and
+    // "unknown" is the honest derived value.
+    if (Number.isFinite(available) && available >= 0 && available <= total) {
+      readings.push(make('memory.used', total - available));
+    } else {
+      readings.push(
+        unknownReading({
+          metric: 'memory.used',
+          timestampMs: nowMs,
+          source: this.id,
+          status: 'invalid',
+          note: `available memory (${available}) is not consistent with the total (${total})`,
+          fidelity: 'live',
+        }),
+      );
+    }
+    return readings;
   }
 }

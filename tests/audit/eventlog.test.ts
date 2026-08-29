@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -218,6 +218,83 @@ describe('EventLog', () => {
         // Pruning removed history, but the log is not empty.
         expect(all.value.length).toBeGreaterThan(0);
         expect(all.value.length).toBeLessThan(200);
+      },
+      { maxSegmentBytes: 256, maxSegments: 3, minSegments: 2 },
+    );
+  });
+
+  it('still verifies as intact after pruning has removed history', async () => {
+    await withLog(
+      async (log) => {
+        for (let i = 0; i < 200; i += 1) {
+          await log.append({
+            kind: 'capability.probed',
+            severity: 'info',
+            message: `padding padding padding padding padding ${i}`,
+          });
+        }
+        await log.prune();
+
+        // Verification used to assume the log began at sequence 1, so any
+        // pruning made it report a permanent break — which degraded NEXUS on
+        // every subsequent start.
+        const verified = await log.verify();
+        expect(verified.ok).toBe(true);
+        if (!verified.ok) return;
+        expect(verified.value.valid).toBe(true);
+        expect(verified.value.recordsChecked).toBeGreaterThan(0);
+      },
+      { maxSegmentBytes: 256, maxSegments: 3, minSegments: 2 },
+    );
+  });
+
+  it('keeps verifying across a reopen after pruning', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'nexus-audit-'));
+    try {
+      const paths = resolvePaths(home);
+      const clock = new FixedClock();
+      const options = { paths, clock, logger, sessionId: 's1', maxSegmentBytes: 256, maxSegments: 3, minSegments: 2 };
+      const first = new EventLog(options);
+      await first.open();
+      for (let i = 0; i < 200; i += 1) {
+        await first.append({ kind: 'capability.probed', severity: 'info', message: `padding padding ${i}` });
+      }
+      await first.prune();
+
+      const second = new EventLog({ ...options, sessionId: 's2' });
+      await second.open();
+      await second.append({ kind: 'session.start', severity: 'info', message: 'after a restart' });
+      const verified = await second.verify();
+      expect(verified.ok && verified.value.valid).toBe(true);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('still detects a record removed from the front after pruning', async () => {
+    await withLog(
+      async (log, home) => {
+        for (let i = 0; i < 200; i += 1) {
+          await log.append({ kind: 'capability.probed', severity: 'info', message: `padding padding ${i}` });
+        }
+        await log.prune();
+        expect((await log.verify()).ok).toBe(true);
+
+        // Delete the oldest surviving record. The anchor still remembers where
+        // the chain was supposed to start, so this must not pass silently.
+        const remaining = (await readdir(resolvePaths(home).events))
+          .filter((f) => f.startsWith('events-'))
+          .sort();
+        const oldest = remaining[0];
+        expect(oldest).toBeDefined();
+        const file = path.join(resolvePaths(home).events, oldest as string);
+        const lines = (await readFile(file, 'utf8')).trim().split('\n');
+        await writeFile(file, `${lines.slice(1).join('\n')}\n`);
+
+        const verified = await log.verify();
+        expect(verified.ok).toBe(true);
+        if (!verified.ok) return;
+        expect(verified.value.valid).toBe(false);
       },
       { maxSegmentBytes: 256, maxSegments: 3, minSegments: 2 },
     );

@@ -49,6 +49,31 @@ with per-control detail, and the caller fails closed.
 - If NEXUS cannot read a control's current value, it does not pretend it could
   put it back.
 
+## Rollback is a write, and goes through the kernel
+
+Restoring a checkpoint changes the machine, so it passes through the safety
+kernel like any other write — `SafetyKernel.evaluateRollback`. It is gated
+*differently* from an optimization, on purpose:
+
+- **Refused outright** when the policy is `observationOnly`. That switch means
+  "do not write to this machine", and it has no exceptions.
+- **Refused for a non-human origin** while NEXUS is observation-only. Vesper
+  cannot write on its own say-so in a mode whose whole point is that NEXUS
+  changes nothing.
+- **Permitted for a human** while NEXUS is degraded, observation-only or
+  recovering. Putting a setting back is the safe direction, and it has to stay
+  available exactly when NEXUS has stopped trusting itself — refusing would
+  strand the machine in a state NEXUS created and cannot undo.
+- **Not subject to cooldowns or the hourly rate limit.** Those exist to stop a
+  control being churned; refusing a revert because of them would be precisely
+  the wrong answer.
+- **Refused for any control that is now prohibited or read-only**, even to
+  restore a previous value.
+
+A restore also reports its own fidelity — the weakest trust across the adapters
+that performed it. A rollback carried out by mock adapters is `mocked`, however
+complete it was, and Vesper is told so.
+
 ## Using it
 
 ```

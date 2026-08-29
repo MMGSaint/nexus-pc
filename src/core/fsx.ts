@@ -41,6 +41,13 @@ export async function pathExists(target: string): Promise<boolean> {
  * loss would make recovery unsafe (checkpoints, session state), and skipped for
  * cheap, regenerable documents.
  */
+/**
+ * Distinguishes concurrent writes from the same process. Keyed only on pid and
+ * target, two overlapping writes to one path would share a temp file and
+ * interleave into a single corrupt document.
+ */
+let temporaryFileCounter = 0;
+
 export async function atomicWrite(
   target: string,
   contents: string,
@@ -50,7 +57,11 @@ export async function atomicWrite(
   const dirResult = await ensureDir(dir);
   if (!dirResult.ok) return dirResult;
 
-  const tmp = path.join(dir, `.${path.basename(target)}.${process.pid.toString(36)}.tmp`);
+  temporaryFileCounter += 1;
+  const tmp = path.join(
+    dir,
+    `.${path.basename(target)}.${process.pid.toString(36)}.${temporaryFileCounter.toString(36)}.tmp`,
+  );
   try {
     const handle = await fs.open(tmp, 'w', options.mode ?? 0o600);
     try {

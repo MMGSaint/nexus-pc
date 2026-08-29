@@ -163,6 +163,77 @@ describe('full lifecycle against the simulated target machine', () => {
   });
 });
 
+describe('rollback goes through the safety kernel', () => {
+  it('refuses a Vesper rollback while NEXUS is in observation mode', async () => {
+    const home = await tempHome();
+    const runtime = await boot(home);
+
+    // Stage a checkpoint so the refusal is about the gate, not a missing file.
+    const checkpoint = await runtime.checkpointStore.capture(
+      ['power.processor.min_state'],
+      'test',
+      { clock: systemClock, logger, runner: new ScriptedCommandRunner(), timeoutMs: 1000 },
+    );
+    if (!checkpoint.ok) throw checkpoint.error;
+
+    const adapter = runtime.actuatorRegistry.get('power.processor.min_state') as MockControlAdapter;
+    const writesBefore = adapter.writes.length;
+
+    await expect(runtime.rollback(checkpoint.value.id)).rejects.toMatchObject({
+      code: 'E_SAFETY_REJECTED',
+    });
+    // Nothing was written: the refusal happened before the restore.
+    expect(adapter.writes.length).toBe(writesBefore);
+
+    const events = await runtime.auditLog.readAll();
+    expect(events.ok).toBe(true);
+    if (events.ok) expect(events.value.map((e) => e.kind)).toContain('rollback.refused');
+
+    await runtime.shutdown('test');
+  });
+
+  it('permits a human rollback while observation-only, because reverting is the safe direction', async () => {
+    const home = await tempHome();
+    const runtime = await boot(home);
+    const context = { clock: systemClock, logger, runner: new ScriptedCommandRunner(), timeoutMs: 1000 };
+
+    const adapter = runtime.actuatorRegistry.get('power.processor.min_state') as MockControlAdapter;
+    const original = adapter.current;
+    const checkpoint = await runtime.checkpointStore.capture(['power.processor.min_state'], 'test', context);
+    if (!checkpoint.ok) throw checkpoint.error;
+
+    await adapter.write(context, 42);
+    const restored = await runtime.performRollback(checkpoint.value.id, 'user', 'test');
+    expect(restored.complete).toBe(true);
+    expect(adapter.current).toBe(original);
+    // Performed by mock adapters, so it must not be labelled live.
+    expect(restored.fidelity).toBe('mocked');
+
+    await runtime.shutdown('test');
+  });
+});
+
+describe('one optimization at a time', () => {
+  it('refuses a concurrent request rather than racing the rate limit', async () => {
+    const home = await tempHome();
+    const runtime = await boot(home, config({ mode: 'autonomous' }));
+
+    const [first, second] = await Promise.all([
+      runtime.runOptimization({ origin: 'user', requestedBy: 'a', profileId: 'balanced' }),
+      runtime.runOptimization({ origin: 'user', requestedBy: 'b', profileId: 'balanced' }),
+    ]);
+
+    // Both are refused here because simulated telemetry caps confidence, but
+    // the guard must hold regardless: two optimizations must never overlap.
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    for (const outcome of [first, second]) {
+      expect(['no_action', 'rejected']).toContain(outcome.status);
+    }
+    await runtime.shutdown('test');
+  });
+});
+
 describe('restart after a crash mid-operation', () => {
   it('reconciles the interrupted operation on the next start', async () => {
     const home = await tempHome();

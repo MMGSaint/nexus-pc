@@ -187,7 +187,19 @@ export class OptimizationEngine {
     const startedAtMs = this.options.clock.now();
     const outcomeId = this.options.ids.next('opt');
     const controls = proposal.changes.map((c) => c.control);
-    const fidelity = this.options.registry.combinedFidelity(controls);
+    /*
+     * An outcome is never more trustworthy than the least trustworthy thing
+     * that produced it — and that includes the telemetry, not just the
+     * actuators. A live actuator driven by simulated telemetry produces a real
+     * change measured against invented numbers; reporting that as `live`
+     * because the write was real is exactly the false success this system
+     * exists to prevent.
+     */
+    const fidelity = combineFidelity(
+      this.options.registry.combinedFidelity(controls),
+      ...(environment.telemetry ? [environment.telemetry.fidelity] : []),
+      ...(environment.beforeSummary.sampleCount > 0 ? [environment.beforeSummary.fidelity] : []),
+    );
     const log = this.options.logger.child('engine');
 
     await this.options.eventLog.append({
@@ -327,7 +339,23 @@ export class OptimizationEngine {
     record = applying.value;
 
     const applied: AppliedChange[] = [];
-    const appliedControls: ControlId[] = [];
+    /**
+     * Controls a write has been *attempted* on, journalled before the write is
+     * issued. This is the set a rollback must cover, and it is deliberately
+     * wider than the set of writes that succeeded:
+     *
+     *  - a crash between the write landing and the journal advancing would
+     *    otherwise leave a control changed with no record that it was touched,
+     *    so recovery could not put it back;
+     *  - a write that lands and then fails verification (powercfg persists the
+     *    value, then re-activating the scheme fails) has still changed the
+     *    machine, and must be reverted rather than reported as "nothing
+     *    happened".
+     *
+     * Restoring a control that was not actually written is a no-op: the
+     * checkpoint holds the value it already has.
+     */
+    const attemptedControls: ControlId[] = [];
     let applyFailure: string | null = null;
 
     for (const change of verdict.permitted) {
@@ -336,13 +364,30 @@ export class OptimizationEngine {
         applyFailure = `no adapter for ${change.control}`;
         break;
       }
+
+      attemptedControls.push(change.control);
+      const intent = await this.options.journal.advance(record, 'applying', `writing ${change.control}`, {
+        appliedControls: [...attemptedControls],
+      });
+      if (!intent.ok) return err(intent.error);
+      record = intent.value;
+
       const previous = checkpoint.value.entries.find((e) => e.control === change.control)?.previousValue ?? null;
       const written = await writeAndVerify(adapter, actuatorContext, change.targetValue);
       if (!written.ok) {
         applyFailure = `${change.control}: ${written.error.message}`;
+        // A failed write may or may not have landed — powercfg can persist a
+        // value and then fail to activate the scheme. Rather than assume
+        // either way, read the control back: if it still holds its captured
+        // value nothing happened and it leaves the rollback scope; anything
+        // else, including an unreadable control, stays in scope.
+        const observed = await adapter.read(actuatorContext);
+        if (observed.ok && previous !== null && structurallyEqual(observed.value, previous)) {
+          attemptedControls.pop();
+          log.debug('failed write did not land; dropping from rollback scope', { control: change.control });
+        }
         break;
       }
-      appliedControls.push(change.control);
       applied.push({
         control: change.control,
         previousValue: previous,
@@ -353,10 +398,6 @@ export class OptimizationEngine {
           ? {}
           : { note: `read back ${JSON.stringify(written.value.observed)} instead` }),
       });
-      const progressed = await this.options.journal.advance(record, 'applying', `applied ${change.control}`, {
-        appliedControls: [...appliedControls],
-      });
-      if (progressed.ok) record = progressed.value;
       if (!written.value.verified) {
         applyFailure = `${change.control} did not take the requested value`;
         break;
@@ -375,7 +416,7 @@ export class OptimizationEngine {
           record,
           checkpointId: checkpoint.value.id,
           applied,
-          appliedControls,
+          attemptedControls,
           actuatorContext,
           reason: `The change could not be applied cleanly (${applyFailure}).`,
           measurements: [],
@@ -384,7 +425,7 @@ export class OptimizationEngine {
     }
 
     const appliedRecord = await this.options.journal.advance(record, 'applied', 'all writes verified', {
-      appliedControls: [...appliedControls],
+      appliedControls: [...attemptedControls],
     });
     if (appliedRecord.ok) record = appliedRecord.value;
 
@@ -445,7 +486,7 @@ export class OptimizationEngine {
           record,
           checkpointId: checkpoint.value.id,
           applied,
-          appliedControls,
+          attemptedControls,
           actuatorContext,
           reason: rollbackReason,
           measurements,
@@ -491,12 +532,12 @@ export class OptimizationEngine {
     record: Parameters<OperationJournal['advance']>[0];
     checkpointId: string;
     applied: readonly AppliedChange[];
-    appliedControls: readonly ControlId[];
+    attemptedControls: readonly ControlId[];
     actuatorContext: ActuatorContext;
     reason: string;
     measurements: OptimizationOutcome['measurements'];
   }): Promise<OptimizationOutcome> {
-    if (args.appliedControls.length === 0) {
+    if (args.attemptedControls.length === 0) {
       await this.options.journal.advance(args.record, 'abandoned', 'nothing was applied');
       return this.outcome({
         id: args.outcomeId,
@@ -515,7 +556,7 @@ export class OptimizationEngine {
     const restored = await this.options.checkpoints.restore(
       args.checkpointId,
       args.actuatorContext,
-      args.appliedControls,
+      args.attemptedControls,
     );
 
     if (!restored.ok || !restored.value.complete) {

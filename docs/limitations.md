@@ -99,6 +99,14 @@ bounds are conservative and the newest artifact is never removed, but a
 long-running installation will not retain everything forever. If you need a
 particular baseline or audit segment kept, copy it out.
 
+## Rollback remains available to a human when NEXUS is degraded
+
+By design: a revert is the corrective action, and refusing it while NEXUS is
+observation-only would leave the machine in a state NEXUS created and could not
+undo. The consequence is that "observation-only" is not literally "no writes
+ever" — a human can still ask for a restore. The `observationOnly` *policy*
+switch is the absolute one, and it refuses everything including rollbacks.
+
 ## Restart guard is per-home, not per-machine
 
 The restart counter lives in the NEXUS home. Two homes on one machine have

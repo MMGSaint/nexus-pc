@@ -68,6 +68,7 @@ export class VesperServer {
   private readonly scopes: ScopeSet;
   private readonly platform: NodeJS.Platform;
   private server: net.Server | null = null;
+  private readonly sockets = new Set<net.Socket>();
   private clientSeen = false;
   private lastRequestAtMs: number | null = null;
 
@@ -142,12 +143,20 @@ export class VesperServer {
     const server = this.server;
     this.server = null;
     if (!server) return;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    // `server.close` resolves only once every connection has gone, and a
+    // client can idle for two minutes. Close the listener, then drop the
+    // connections, so shutdown does not wait on someone else's socket.
+    const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+    for (const socket of this.sockets) socket.destroy();
+    this.sockets.clear();
+    await closed;
     if (this.platform !== 'win32') await removeFile(this.endpoint);
   }
 
   private onConnection(socket: net.Socket): void {
     const state: ConnectionState = { buffer: '', requestTimes: [], authenticated: false };
+    this.sockets.add(socket);
+    socket.once('close', () => this.sockets.delete(socket));
 
     socket.setEncoding('utf8');
     socket.setTimeout(IDLE_TIMEOUT_MS, () => {

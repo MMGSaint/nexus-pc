@@ -347,6 +347,85 @@ describe('crash recovery', () => {
     expect(f.adapter.current).toBe(5);
   });
 
+  it('does not revert controls an interrupted run never reached', async () => {
+    const home = await tempHome();
+    const paths = resolvePaths(home);
+    const clock = new FixedClock();
+    const registry = new ActuatorRegistry();
+    const touched = new MockControlAdapter('power.processor.min_state', { initial: 5 });
+    const untouched = new MockControlAdapter('power.processor.max_state', { initial: 100 });
+    registry.register(touched);
+    registry.register(untouched);
+
+    const checkpoints = new CheckpointStore({
+      paths, clock, logger, ids: new SequentialIds(), sessionId: 'old', registry,
+    });
+    const journal = new OperationJournal(paths, clock, 'old');
+    const eventLog = new EventLog({ paths, clock, logger, sessionId: 'new' });
+    await eventLog.open();
+    const context = { clock, logger, runner: new ScriptedCommandRunner(), timeoutMs: 1000 };
+
+    const checkpoint = await checkpoints.capture(
+      ['power.processor.min_state', 'power.processor.max_state'],
+      'before crash',
+      context,
+    );
+    if (!checkpoint.ok) throw checkpoint.error;
+
+    const record = await journal.record('op_partial', 'prop', [
+      'power.processor.min_state',
+      'power.processor.max_state',
+    ]);
+    if (!record.ok) throw record.error;
+    // Only the first control was reached before the crash.
+    await journal.advance(record.value, 'applying', 'interrupted', {
+      checkpointId: checkpoint.value.id,
+      appliedControls: ['power.processor.min_state'],
+    });
+
+    // The user changed the second control by hand after the crash.
+    await untouched.write(context, 70);
+
+    await recoverInterruptedOperations({ journal, checkpoints, eventLog, logger, context });
+
+    expect(touched.current).toBe(5);
+    // Recovery must not have reverted the manual change.
+    expect(untouched.current).toBe(70);
+  });
+
+  it('abandons rather than restoring when no write was journalled', async () => {
+    const home = await tempHome();
+    const paths = resolvePaths(home);
+    const clock = new FixedClock();
+    const registry = new ActuatorRegistry();
+    const adapter = new MockControlAdapter('power.processor.min_state', { initial: 5 });
+    registry.register(adapter);
+    const checkpoints = new CheckpointStore({
+      paths, clock, logger, ids: new SequentialIds(), sessionId: 'old', registry,
+    });
+    const journal = new OperationJournal(paths, clock, 'old');
+    const eventLog = new EventLog({ paths, clock, logger, sessionId: 'new' });
+    await eventLog.open();
+    const context = { clock, logger, runner: new ScriptedCommandRunner(), timeoutMs: 1000 };
+
+    const checkpoint = await checkpoints.capture(['power.processor.min_state'], 'before crash', context);
+    if (!checkpoint.ok) throw checkpoint.error;
+    const record = await journal.record('op_none', 'prop', ['power.processor.min_state']);
+    if (!record.ok) throw record.error;
+    await journal.advance(record.value, 'applying', 'interrupted before the first write', {
+      checkpointId: checkpoint.value.id,
+      appliedControls: [],
+    });
+
+    // Someone changed it by hand afterwards; recovery must leave it alone.
+    await adapter.write(context, 42);
+    const outcome = await recoverInterruptedOperations({ journal, checkpoints, eventLog, logger, context });
+
+    expect(outcome.actions[0]?.action).toBe('abandoned');
+    expect(outcome.unresolved).toBe(false);
+    expect(adapter.current).toBe(42);
+  });
+
   it('never assumes an interrupted operation succeeded', async () => {
     const f = await recoveryFixture('applying');
     await recoverInterruptedOperations({ ...f, logger });
