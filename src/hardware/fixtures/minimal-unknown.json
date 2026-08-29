@@ -1,0 +1,45 @@
+{
+  "$comment": "A deliberately impoverished machine: almost nothing is discoverable. Used to prove NEXUS reports unknowns as unknown instead of inventing defaults.",
+  "id": "minimal-unknown",
+  "description": "A host where nearly every discovery source fails",
+  "cpu": {
+    "model": null,
+    "vendor": null,
+    "family": null,
+    "physicalCores": null,
+    "logicalProcessors": null,
+    "baseClockMhz": null,
+    "maxClockMhz": null,
+    "socket": null,
+    "architecture": null,
+    "features": []
+  },
+  "gpus": [],
+  "memory": {
+    "totalBytes": null,
+    "installedBytes": null,
+    "availableBytes": null,
+    "moduleCount": null,
+    "configuredSpeedMhz": null,
+    "ratedSpeedMhz": null,
+    "memoryType": null,
+    "availableSource": null
+  },
+  "os": {
+    "platform": "win32",
+    "name": null,
+    "version": null,
+    "build": null,
+    "architecture": null,
+    "kernel": null
+  },
+  "storage": [],
+  "power": {
+    "activeSchemeId": null,
+    "activeSchemeName": null,
+    "availableSchemes": [],
+    "hasBattery": null
+  },
+  "machineIdSeed": null,
+  "warnings": ["every discovery source on this fixture is unavailable"]
+}

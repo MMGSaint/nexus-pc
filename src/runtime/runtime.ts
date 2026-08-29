@@ -1,0 +1,1104 @@
+/**
+ * The NEXUS runtime.
+ *
+ * Startup is staged and non-blocking. `start()` brings up the critical core —
+ * instance lock, session record, audit log, crash recovery — and then returns,
+ * leaving the slow work (hardware discovery, capability probing, baseline
+ * capture) to finish in the background. Until it does, NEXUS reports
+ * `initializing` and says which stages are outstanding. It never claims to be
+ * ready because the process is alive.
+ *
+ * The runtime is also the `VesperHost`: the small, explicit surface Vesper can
+ * reach. Everything Vesper asks for goes through the same safety kernel, the
+ * same capability checks and the same fidelity labelling as a request made at
+ * the keyboard.
+ */
+
+import type { Clock } from '../core/clock.js';
+import type { CommandRunner } from '../core/exec.js';
+import { NodeCommandRunner } from '../core/exec.js';
+import type { NexusError } from '../core/errors.js';
+import { nexusError, toNexusError } from '../core/errors.js';
+import type { Fidelity } from '../core/fidelity.js';
+import type { IdSource } from '../core/ids.js';
+import { systemIds } from '../core/ids.js';
+import type { Logger } from '../core/logger.js';
+import type { NexusPaths } from '../core/paths.js';
+import { allDirectories } from '../core/paths.js';
+import { ensureDir } from '../core/fsx.js';
+import type { Result } from '../core/result.js';
+import { err, ok } from '../core/result.js';
+import { NEXUS_VERSION } from '../version.js';
+
+import type { CapabilityRecord } from '../domain/capability.js';
+import type { ControlId, ControlValue } from '../domain/control.js';
+import type { HealthReport, RunState, ShutdownKind } from '../domain/health.js';
+import type { OptimizationOutcome } from '../domain/optimization.js';
+import type { ProfileDocument } from '../domain/profile.js';
+import { OBSERVATION_PROFILE_ID } from '../domain/profile.js';
+import type { HardwareInventory } from '../domain/hardware.js';
+import type { TelemetrySnapshot, TelemetrySummary } from '../domain/telemetry.js';
+import type { ContextHint, WorkloadClassification } from '../domain/workload.js';
+import { hintIsFresh } from '../domain/workload.js';
+
+import { EventLog } from '../audit/eventlog.js';
+import { BaselineStore } from '../baseline/capture.js';
+import type { Baseline } from '../baseline/capture.js';
+import { CapabilityRegistry, summarize as summarizeCapabilities } from '../capabilities/registry.js';
+import { buildCapabilityProbes } from '../capabilities/probes.js';
+import { CheckpointStore } from '../checkpoint/store.js';
+import type { RestoreResult } from '../checkpoint/store.js';
+import type { NexusConfig } from '../config/config.js';
+import { HardwareDiscovery } from '../hardware/discovery.js';
+import { LinuxHardwareProvider } from '../hardware/providers/linux.js';
+import { MockHardwareProvider } from '../hardware/providers/mock.js';
+import { WindowsHardwareProvider } from '../hardware/providers/windows.js';
+import type { ActuatorContext } from '../optimizer/actuator.js';
+import { ActuatorRegistry, MockControlAdapter } from '../optimizer/actuator.js';
+import { windowsPowerAdapters } from '../optimizer/actuators/windows-power.js';
+import { OptimizationEngine } from '../optimizer/engine.js';
+import type { ExecutionEnvironment } from '../optimizer/engine.js';
+import { OperationJournal } from '../optimizer/journal.js';
+import { ProfileStore, applicability } from '../profiles/store.js';
+import { SafetyKernel } from '../safety/kernel.js';
+import { BASE_POLICY, narrowPolicy } from '../safety/policy.js';
+import { writableControls } from '../safety/controls.js';
+import { TelemetryPipeline } from '../telemetry/pipeline.js';
+import { LinuxTelemetrySource } from '../telemetry/sources/linux.js';
+import { MockTelemetrySource, SIMULATED_IDLE } from '../telemetry/sources/mock.js';
+import { OsMemorySource } from '../telemetry/sources/os-memory.js';
+import { SelfTelemetrySource } from '../telemetry/sources/self.js';
+import { SensorBridgeSource } from '../telemetry/sources/sensor-bridge.js';
+import { WindowsTelemetrySource } from '../telemetry/sources/windows.js';
+import { summarize } from '../telemetry/summary.js';
+import { WorkloadClassifier, signalsFromSnapshot } from '../workload/classifier.js';
+import { ensureToken } from '../vesper/auth.js';
+import type { ProfileView, RecommendationView, VesperHost } from '../vesper/handlers.js';
+import { VesperServer } from '../vesper/server.js';
+
+import { InstanceLock } from './instance-lock.js';
+import { recoverInterruptedOperations } from './recovery.js';
+import type { RecoveryOutcome } from './recovery.js';
+import { SessionStore } from './session-state.js';
+import type { SessionRecord } from './session-state.js';
+import { StageTracker } from './stages.js';
+
+export interface RuntimeOptions {
+  readonly paths: NexusPaths;
+  readonly config: NexusConfig;
+  readonly clock: Clock;
+  readonly logger: Logger;
+  readonly ids?: IdSource;
+  readonly runner?: CommandRunner;
+  readonly platform?: NodeJS.Platform;
+  /** Skip the instance lock. Only for one-shot CLI commands that do not write. */
+  readonly skipInstanceLock?: boolean;
+  /** Injected in tests so the measurement window costs no real time. */
+  readonly wait?: (ms: number) => Promise<void>;
+}
+
+export class NexusRuntime implements VesperHost {
+  readonly sessionId: string;
+  readonly requesterId = 'vesper';
+
+  private readonly options: RuntimeOptions;
+  private readonly logger: Logger;
+  private readonly clock: Clock;
+  private readonly ids: IdSource;
+  private readonly runner: CommandRunner;
+  private readonly platform: NodeJS.Platform;
+
+  private readonly stages: StageTracker;
+  private readonly kernel: SafetyKernel;
+  private readonly registry = new ActuatorRegistry();
+  private readonly capabilities: CapabilityRegistry;
+  private readonly telemetry: TelemetryPipeline;
+  private readonly classifier = new WorkloadClassifier();
+  private readonly discovery = new HardwareDiscovery();
+  private readonly eventLog: EventLog;
+  private readonly sessions: SessionStore;
+  private readonly lock: InstanceLock;
+  private readonly checkpoints: CheckpointStore;
+  private readonly journal: OperationJournal;
+  private readonly baselines: BaselineStore;
+  private readonly profiles: ProfileStore;
+  private readonly engine: OptimizationEngine;
+  private vesper: VesperServer | null = null;
+
+  private startedAtMs = 0;
+  private runState: RunState = 'initializing';
+  private degradedReasons: string[] = [];
+  private inventory: HardwareInventory | null = null;
+  private baseline: Baseline | null = null;
+  private activeProfileId: string = OBSERVATION_PROFILE_ID;
+  private activeProfileAppliedAtMs: number | null = null;
+  private previousShutdown: ShutdownKind = 'never_started';
+  private recovery: RecoveryOutcome | null = null;
+  private contextHint: ContextHint | null = null;
+  private readonly outcomes = new Map<string, OptimizationOutcome>();
+  private readonly appliedHistory: { control: ControlId; appliedAtMs: number }[] = [];
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private shuttingDown = false;
+  private backgroundInit: Promise<void> | null = null;
+
+  constructor(options: RuntimeOptions) {
+    this.options = options;
+    this.clock = options.clock;
+    this.logger = options.logger.child('runtime');
+    this.ids = options.ids ?? systemIds;
+    this.runner = options.runner ?? new NodeCommandRunner();
+    this.platform = options.platform ?? process.platform;
+    this.sessionId = this.ids.next('sess');
+
+    const narrowed = narrowPolicy(BASE_POLICY, options.config.policy);
+    this.narrowingApplied = narrowed.applied.length;
+    this.narrowingRejected = narrowed.rejected;
+    this.kernel = new SafetyKernel(narrowed.policy);
+
+    this.stages = new StageTracker(this.clock);
+    this.capabilities = new CapabilityRegistry(this.clock, this.logger);
+    this.eventLog = new EventLog({
+      paths: options.paths,
+      clock: this.clock,
+      logger: this.logger,
+      sessionId: this.sessionId,
+    });
+    this.sessions = new SessionStore({
+      paths: options.paths,
+      clock: this.clock,
+      sessionId: this.sessionId,
+      nexusVersion: NEXUS_VERSION,
+    });
+    this.lock = new InstanceLock({
+      paths: options.paths,
+      clock: this.clock,
+      logger: this.logger,
+      sessionId: this.sessionId,
+      nexusVersion: NEXUS_VERSION,
+      platform: this.platform,
+    });
+    this.checkpoints = new CheckpointStore({
+      paths: options.paths,
+      clock: this.clock,
+      logger: this.logger,
+      ids: this.ids,
+      sessionId: this.sessionId,
+      registry: this.registry,
+    });
+    this.journal = new OperationJournal(options.paths, this.clock, this.sessionId);
+    this.baselines = new BaselineStore({
+      paths: options.paths,
+      clock: this.clock,
+      logger: this.logger,
+      ids: this.ids,
+      sessionId: this.sessionId,
+      nexusVersion: NEXUS_VERSION,
+      registry: this.registry,
+    });
+    this.profiles = new ProfileStore(options.paths, this.logger, narrowed.policy);
+    this.telemetry = new TelemetryPipeline({
+      clock: this.clock,
+      logger: this.logger,
+      intervals: {
+        low_activity: options.config.telemetry.lowActivityIntervalMs,
+        active_workload: options.config.telemetry.activeIntervalMs,
+        optimization: options.config.telemetry.optimizationIntervalMs,
+      },
+      historyLimit: options.config.telemetry.historyLimit,
+      selfCpuBudgetPercent: narrowed.policy.global.selfCpuBudgetPercent,
+    });
+    this.engine = new OptimizationEngine({
+      clock: this.clock,
+      logger: this.logger,
+      ids: this.ids,
+      kernel: this.kernel,
+      registry: this.registry,
+      checkpoints: this.checkpoints,
+      journal: this.journal,
+      eventLog: this.eventLog,
+      ...(options.wait ? { wait: options.wait } : {}),
+    });
+  }
+
+  private readonly narrowingApplied: number;
+  private readonly narrowingRejected: readonly { path: string; from: string; to: string }[];
+
+  now(): number {
+    return this.clock.now();
+  }
+
+  get actuatorContext(): ActuatorContext {
+    return { clock: this.clock, logger: this.logger, runner: this.runner, timeoutMs: 15_000 };
+  }
+
+  /* ------------------------------------------------------------- startup */
+
+  /**
+   * Bring up the critical core, then continue initialization in the
+   * background. Returns as soon as NEXUS can answer for itself.
+   */
+  async start(): Promise<Result<HealthReport, NexusError>> {
+    this.startedAtMs = this.clock.now();
+
+    for (const dir of allDirectories(this.options.paths)) {
+      const made = await ensureDir(dir);
+      if (!made.ok) return err(made.error);
+    }
+
+    /* ------------------------------------------------------------- core */
+    const coreOk = await this.stages.run('core', async () => {
+      if (!this.options.skipInstanceLock) {
+        const acquired = await this.lock.acquire();
+        if (!acquired.ok) throw acquired.error;
+      }
+      const previous = await this.sessions.previous();
+      this.previousShutdown = SessionStore.classifyShutdown(previous);
+      const begun = await this.sessions.begin();
+      if (!begun.ok) throw begun.error;
+      if (begun.value.restart.looping) {
+        this.degrade(begun.value.restart.reason ?? 'restart loop detected');
+      }
+      await this.registerComponents();
+      return `session ${this.sessionId}`;
+    });
+
+    if (!coreOk) {
+      this.runState = 'failed';
+      const detail = this.stages.all().find((s) => s.stage === 'core')?.detail ?? 'core stage failed';
+      return err(nexusError('E_CONFLICT', detail));
+    }
+
+    /* ----------------------------------------------------------- health */
+    this.stages.finish('health', 'complete', 'health reporting is available');
+
+    /* ------------------------------------------------------------ audit */
+    await this.stages.run('audit', async () => {
+      const opened = await this.eventLog.open();
+      if (!opened.ok) throw opened.error;
+      const verified = await this.eventLog.verify();
+      if (verified.ok && !verified.value.valid) {
+        this.degrade(
+          `The audit log's hash chain is broken at record ${verified.value.firstBrokenSeq ?? '?'} (${verified.value.reason ?? 'unknown'}). History before that point cannot be trusted.`,
+        );
+      }
+      await this.eventLog.append({
+        kind: 'session.start',
+        severity: 'info',
+        message: `NEXUS ${NEXUS_VERSION} starting in ${this.options.config.mode} mode`,
+        data: { sessionId: this.sessionId, platform: this.platform, previousShutdown: this.previousShutdown },
+      });
+      if (this.previousShutdown === 'crash') {
+        await this.eventLog.append({
+          kind: 'session.crash_detected',
+          severity: 'warning',
+          message: 'the previous session did not shut down cleanly',
+        });
+      }
+      if (this.narrowingRejected.length > 0) {
+        await this.eventLog.append({
+          kind: 'safety.policy_narrowed',
+          severity: 'warning',
+          message: `configuration attempted to widen the safety policy in ${this.narrowingRejected.length} place(s); those requests were ignored`,
+          data: { rejected: this.narrowingRejected.map((r) => r.path) },
+        });
+      } else if (this.narrowingApplied > 0) {
+        await this.eventLog.append({
+          kind: 'safety.policy_narrowed',
+          severity: 'info',
+          message: `configuration narrowed the safety policy in ${this.narrowingApplied} place(s)`,
+        });
+      }
+      return `chain head ${this.eventLog.headHash.slice(0, 12)}`;
+    });
+
+    /* --------------------------------------------------------- recovery */
+    await this.stages.run('recovery', async () => {
+      const outcome = await recoverInterruptedOperations({
+        journal: this.journal,
+        checkpoints: this.checkpoints,
+        eventLog: this.eventLog,
+        logger: this.logger,
+        context: this.actuatorContext,
+      });
+      this.recovery = outcome;
+      if (outcome.unresolved) {
+        this.degrade(outcome.summary);
+        this.runState = 'observation_only';
+      }
+      return outcome.summary;
+    });
+
+    this.startHeartbeat();
+    this.backgroundInit = this.continueInitialization();
+    return ok(this.health());
+  }
+
+  /** The slow stages. Failures here degrade NEXUS; they do not stop it. */
+  private async continueInitialization(): Promise<void> {
+    await this.stages.run('telemetry', async () => {
+      await this.telemetry.startSources();
+      await this.telemetry.sampleOnce();
+      if (!this.telemetry.working) {
+        this.degrade('No telemetry source produced a usable reading.');
+      }
+      return `${this.telemetry.registeredSources.length} source(s)`;
+    });
+
+    await this.stages.run('hardware', async () => {
+      const discovered = await this.discovery.discover({
+        clock: this.clock,
+        logger: this.logger,
+        runner: this.runner,
+        platform: this.platform,
+        paths: this.options.paths,
+      });
+      if (!discovered.ok) {
+        await this.eventLog.append({
+          kind: 'hardware.discovery_failed',
+          severity: 'warning',
+          message: discovered.error.message,
+        });
+        this.degrade(`Hardware discovery failed: ${discovered.error.message}`);
+        throw discovered.error;
+      }
+      this.inventory = discovered.value;
+      await this.eventLog.append({
+        kind: 'hardware.discovered',
+        severity: 'info',
+        message: `discovered by ${discovered.value.provider}`,
+        data: {
+          fidelity: discovered.value.fidelity,
+          cpu: discovered.value.cpu.model,
+          gpu: discovered.value.gpus[0]?.model ?? null,
+          warnings: discovered.value.warnings.length,
+        },
+      });
+      return discovered.value.cpu.model ?? discovered.value.provider;
+    });
+
+    await this.stages.run('capabilities', async () => {
+      const records = await this.capabilities.probeAll();
+      const summary = summarizeCapabilities(records);
+      for (const record of records) {
+        if (record.state === 'unavailable' || record.state === 'unsupported') {
+          await this.eventLog.append({
+            kind: 'capability.failed',
+            severity: 'info',
+            message: `${record.id} is ${record.state}: ${record.detail}`,
+          });
+        }
+      }
+      await this.eventLog.append({
+        kind: 'capability.probed',
+        severity: 'info',
+        message: `${summary.byState.available} of ${summary.total} capabilities are available`,
+        data: { available: summary.available },
+      });
+      return `${summary.byState.available}/${summary.total} available`;
+    });
+
+    await this.stages.run('profiles', async () => {
+      const { loaded, rejected } = await this.profiles.load();
+      for (const bad of rejected) {
+        await this.eventLog.append({
+          kind: 'profile.rejected',
+          severity: 'warning',
+          message: `profile "${bad.id}" was rejected`,
+          data: { errors: bad.errors },
+        });
+      }
+      await this.eventLog.append({
+        kind: 'profile.loaded',
+        severity: 'info',
+        message: `${loaded.length} profile(s) loaded`,
+      });
+      return `${loaded.length} loaded, ${rejected.length} rejected`;
+    });
+
+    await this.stages.run('baseline', async () => {
+      const existing = await this.baselines.latest();
+      if (existing.ok) {
+        this.baseline = existing.value;
+        return `loaded ${existing.value.id}`;
+      }
+      const captured = await this.captureBaseline();
+      if (!captured.ok) {
+        await this.eventLog.append({
+          kind: 'baseline.failed',
+          severity: 'warning',
+          message: captured.error.message,
+        });
+        throw captured.error;
+      }
+      return `captured ${captured.value.id}`;
+    });
+
+    this.stages.finish('optimizer', 'complete', `mode ${this.options.config.mode}`);
+
+    if (!this.options.config.vesper.enabled) {
+      this.stages.finish('vesper', 'skipped', 'the Vesper interface is disabled in configuration');
+    } else {
+      await this.stages.run('vesper', async () => {
+      const token = await ensureToken(this.options.paths, this.ids);
+      if (!token.ok) throw token.error;
+      const server = new VesperServer({
+        paths: this.options.paths,
+        clock: this.clock,
+        logger: this.logger,
+        eventLog: this.eventLog,
+        token: token.value,
+        scopes: this.options.config.vesper.scopes,
+        host: this,
+        platform: this.platform,
+      });
+      const started = await server.start();
+      if (!started.ok) throw started.error;
+      this.vesper = server;
+      return started.value;
+      });
+    }
+
+    this.settleRunState();
+    this.telemetry.start();
+    await this.sessions.markStable();
+    this.logger.info('initialization complete', { runState: this.runState });
+  }
+
+  /** Wait for background initialization. Used by one-shot CLI commands. */
+  async waitUntilInitialized(): Promise<RunState> {
+    if (this.backgroundInit) await this.backgroundInit;
+    return this.runState;
+  }
+
+  private async registerComponents(): Promise<void> {
+    const simulateHardware = this.options.config.simulate.hardwareFixture;
+
+    // Telemetry sources.
+    this.telemetry.register(new SelfTelemetrySource());
+    this.telemetry.register(new OsMemorySource());
+    if (this.options.config.simulate.telemetry) {
+      this.telemetry.register(new MockTelemetrySource(SIMULATED_IDLE));
+    } else if (this.platform === 'win32') {
+      this.telemetry.register(new WindowsTelemetrySource({ clock: this.clock, logger: this.logger }));
+    } else if (this.platform === 'linux') {
+      this.telemetry.register(new LinuxTelemetrySource());
+    }
+    this.telemetry.register(new SensorBridgeSource({ paths: this.options.paths }));
+
+    // Hardware providers. A configured fixture takes precedence, so a
+    // developer machine can model the target hardware deliberately.
+    if (simulateHardware) {
+      // Awaited, not fired off: registering after discovery has already run
+      // would silently fall through to the real provider.
+      const provider = await MockHardwareProvider.fromName(simulateHardware);
+      if (provider.ok) this.discovery.register(provider.value);
+      else this.logger.warn('hardware fixture could not be loaded', { error: provider.error.message });
+    }
+    this.discovery.register(new WindowsHardwareProvider());
+    this.discovery.register(new LinuxHardwareProvider());
+
+    // Control adapters.
+    if (this.platform === 'win32' && !simulateHardware) {
+      for (const adapter of windowsPowerAdapters()) this.registry.register(adapter);
+    } else if (simulateHardware) {
+      // Simulation registers mock adapters so the whole pipeline is
+      // exercisable. Everything they produce is labelled `mocked`.
+      for (const descriptor of writableControls()) {
+        const initial: ControlValue =
+          descriptor.valueSpec.kind === 'integer'
+            ? descriptor.valueSpec.min
+            : descriptor.valueSpec.kind === 'boolean'
+              ? false
+              : descriptor.valueSpec.kind === 'enum'
+                ? (descriptor.valueSpec.values[0]?.value ?? 'normal')
+                : 'simulated-value';
+        this.registry.register(new MockControlAdapter(descriptor.id, { initial }));
+      }
+    }
+
+    // Capability probes read whatever state exists when they run.
+    this.capabilities.registerAll(
+      buildCapabilityProbes(() => ({
+        inventory: this.inventory,
+        snapshot: this.telemetry.latest(),
+        registry: this.registry,
+        actuatorContext: this.actuatorContext,
+        platform: this.platform,
+        vesperListening: this.vesper?.listening ?? false,
+      })),
+    );
+  }
+
+  private degrade(reason: string): void {
+    if (!this.degradedReasons.includes(reason)) this.degradedReasons.push(reason);
+    this.logger.warn('degraded', { reason });
+  }
+
+  private settleRunState(): void {
+    if (this.runState === 'observation_only' || this.runState === 'stopping' || this.runState === 'stopped') return;
+    if (this.options.config.mode === 'observation') {
+      this.runState = 'observation_only';
+      return;
+    }
+    if (this.stages.requiredComplete() && this.degradedReasons.length === 0) {
+      this.runState = 'ready';
+      return;
+    }
+    this.runState = this.stages.requiredComplete() ? 'degraded' : 'initializing';
+  }
+
+  private startHeartbeat(): void {
+    this.heartbeatTimer = setInterval(() => {
+      void this.sessions.heartbeat(this.runState);
+    }, 30_000);
+    this.heartbeatTimer.unref?.();
+  }
+
+  /* -------------------------------------------------------------- health */
+
+  health(): HealthReport {
+    const records = this.capabilities.list();
+    const summary = summarizeCapabilities(records);
+    const latest = this.telemetry.latest();
+    const optimizationEnabled = this.runState === 'ready' && this.options.config.mode !== 'observation';
+
+    return {
+      generatedAtMs: this.clock.now(),
+      nexusVersion: NEXUS_VERSION,
+      sessionId: this.sessionId,
+      pid: process.pid,
+      uptimeMs: this.startedAtMs === 0 ? 0 : this.clock.now() - this.startedAtMs,
+      runState: this.runState,
+      stages: this.stages.all(),
+
+      hardwareDetected: this.inventory !== null,
+      hardwareFidelity: this.inventory?.fidelity ?? 'unavailable',
+      telemetryWorking: this.telemetry.working,
+      telemetryFidelity: latest?.fidelity ?? 'unavailable',
+      capabilities: {
+        total: summary.total,
+        byState: summary.byState,
+        available: summary.available,
+        unavailable: summary.unavailable,
+      },
+
+      activeProfileId: this.activeProfileId,
+      optimizationEnabled,
+      optimizationDisabledReason: optimizationEnabled
+        ? null
+        : this.options.config.mode === 'observation'
+          ? 'NEXUS is in observation mode; it is measuring and reporting only.'
+          : this.runState === 'observation_only'
+            ? 'NEXUS has dropped to observation-only.'
+            : `NEXUS is ${this.runState}.`,
+
+      degraded: this.degradedReasons.length > 0,
+      degradedReasons: [...this.degradedReasons],
+
+      previousShutdown: this.previousShutdown,
+      recoveryRequired: this.recovery?.required ?? false,
+      recoverySummary: this.recovery?.summary ?? null,
+
+      vesperInterface: {
+        enabled: this.options.config.vesper.enabled,
+        listening: this.vesper?.listening ?? false,
+        endpoint: this.vesper?.listening ? this.vesper.endpoint : null,
+        clientSeen: this.vesper?.hasSeenClient ?? false,
+        lastRequestAtMs: this.vesper?.lastRequestMs ?? null,
+      },
+
+      selfFootprint: {
+        rssBytes: process.memoryUsage.rss(),
+        cpuPercent: this.telemetry.selfCpuPercentEstimate,
+        samplingMode: this.telemetry.currentMode,
+        telemetryIntervalMs: this.telemetry.currentIntervalMs,
+      },
+    };
+  }
+
+  /* -------------------------------------------------------------- actions */
+
+  async captureBaseline(): Promise<Result<Baseline, NexusError>> {
+    if (!this.inventory) {
+      return err(nexusError('E_STATE', 'a baseline needs a hardware inventory, and discovery has not produced one'));
+    }
+    const snapshots = this.telemetry.history();
+    const classification = await this.analyzeWorkload();
+    const captured = await this.baselines.capture({
+      inventory: this.inventory,
+      capabilities: this.capabilities.snapshot(),
+      snapshots,
+      workload: classification,
+      context: this.actuatorContext,
+    });
+    if (!captured.ok) return captured;
+    this.baseline = captured.value;
+    await this.eventLog.append({
+      kind: 'baseline.captured',
+      severity: 'info',
+      message: `baseline ${captured.value.id} captured`,
+      data: {
+        fidelity: captured.value.fidelity,
+        controlCoverage: Number(captured.value.controlCoverage.toFixed(2)),
+      },
+    });
+    return captured;
+  }
+
+  async analyzeWorkload(): Promise<WorkloadClassification> {
+    const snapshot: TelemetrySnapshot | null = this.telemetry.latest();
+    if (!snapshot) {
+      return {
+        timestampMs: this.clock.now(),
+        workload: 'unknown',
+        confidence: 0,
+        candidates: [],
+        fidelity: 'unavailable',
+        missingSignals: ['telemetry'],
+        contextConflict: false,
+        explanation: 'No telemetry has been sampled yet, so the workload cannot be classified.',
+      };
+    }
+    const hint =
+      this.contextHint && hintIsFresh(this.contextHint, this.clock.now()) ? this.contextHint : undefined;
+    return this.classifier.classify(signalsFromSnapshot(snapshot), hint, this.clock.now());
+  }
+
+  async currentControlValues(): Promise<Map<ControlId, ControlValue | null>> {
+    const values = new Map<ControlId, ControlValue | null>();
+    for (const control of this.registry.controls()) {
+      const adapter = this.registry.get(control);
+      if (!adapter) continue;
+      const value = await adapter.read(this.actuatorContext);
+      values.set(control, value.ok ? value.value : null);
+    }
+    return values;
+  }
+
+  /* ---------------------------------------------------------- VesperHost */
+
+  async getStatus(): Promise<HealthReport> {
+    return this.health();
+  }
+
+  async getCapabilities(): Promise<readonly CapabilityRecord[]> {
+    return this.capabilities.list();
+  }
+
+  async getTelemetrySummary(windowMs: number): Promise<TelemetrySummary> {
+    return summarize(this.telemetry.history(windowMs));
+  }
+
+  async getCurrentProfile(): Promise<{ profile: ProfileDocument | null; appliedAtMs: number | null }> {
+    return {
+      profile: this.profiles.get(this.activeProfileId)?.profile ?? null,
+      appliedAtMs: this.activeProfileAppliedAtMs,
+    };
+  }
+
+  async listProfiles(): Promise<readonly ProfileView[]> {
+    const caps = this.capabilities.snapshot();
+    return this.profiles.list().map((loaded) => {
+      const applies = applicability(loaded.profile, caps);
+      return {
+        id: loaded.profile.id,
+        name: loaded.profile.name,
+        description: loaded.profile.description,
+        targets: loaded.profile.targets,
+        settings: loaded.profile.settings.map((s) => ({
+          control: s.control,
+          value: s.value,
+          rationale: s.rationale,
+        })),
+        applicableHere: applies.applicable || loaded.profile.id === OBSERVATION_PROFILE_ID,
+      };
+    });
+  }
+
+  /**
+   * Record intent Vesper observed. NEXUS stores who said it and when, applies
+   * a TTL, and treats it as evidence in classification — never as an
+   * instruction, and never as a reason to skip a safety check.
+   */
+  async declareContext(hint: ContextHint): Promise<{ accepted: boolean; note: string }> {
+    this.contextHint = hint;
+    await this.eventLog.append({
+      kind: 'vesper.context_declared',
+      severity: 'info',
+      message: `${hint.declaredBy} declared a "${hint.workload}" workload`,
+      data: { ttlMs: hint.ttlMs, note: hint.note ?? null },
+    });
+    return {
+      accepted: true,
+      note: 'Recorded as context. NEXUS will weigh it against what it can observe and will report any disagreement rather than assuming it is correct.',
+    };
+  }
+
+  async recommend(profileId?: string): Promise<RecommendationView> {
+    const workload = await this.analyzeWorkload();
+    const chosen = profileId
+      ? this.profiles.get(profileId)
+      : this.profiles.suggestFor(workload.workload);
+
+    if (!chosen) {
+      return {
+        workload,
+        recommendedProfileId: null,
+        rationale: profileId
+          ? `There is no profile named "${profileId}".`
+          : `No profile targets a ${workload.workload} workload.`,
+        proposedChanges: [],
+        noActionReason: 'no_proposal_generated',
+      };
+    }
+
+    const current = await this.currentControlValues();
+    const result = this.engine.propose({
+      workload,
+      profile: chosen.profile,
+      currentValues: current,
+      origin: 'vesper',
+      requestedBy: this.requesterId,
+    });
+
+    if (result.kind === 'no_action') {
+      return {
+        workload,
+        recommendedProfileId: chosen.profile.id,
+        rationale: result.summary,
+        proposedChanges: [],
+        noActionReason: result.reason,
+      };
+    }
+
+    return {
+      workload,
+      recommendedProfileId: chosen.profile.id,
+      rationale: `Profile "${chosen.profile.name}" targets a ${workload.workload} workload.`,
+      proposedChanges: result.proposal.changes.map((c) => ({
+        control: c.control,
+        currentValue: current.get(c.control) ?? null,
+        targetValue: c.targetValue,
+        rationale: c.rationale,
+      })),
+      noActionReason: null,
+    };
+  }
+
+  async optimize(params: { profileId?: string; dryRun?: boolean }): Promise<OptimizationOutcome> {
+    return this.runOptimization({
+      origin: 'vesper',
+      requestedBy: this.requesterId,
+      ...(params.profileId === undefined ? {} : { profileId: params.profileId }),
+      ...(params.dryRun === undefined ? {} : { dryRun: params.dryRun }),
+    });
+  }
+
+  async rollback(checkpointId: string): Promise<RestoreResult> {
+    const restored = await this.checkpoints.restore(checkpointId, this.actuatorContext);
+    if (!restored.ok) {
+      await this.eventLog.append({
+        kind: 'rollback.refused',
+        severity: 'error',
+        message: restored.error.message,
+        data: { checkpointId },
+      });
+      throw restored.error;
+    }
+    await this.eventLog.append({
+      kind: 'rollback.performed',
+      severity: 'notice',
+      message: `rollback of checkpoint ${checkpointId} ${restored.value.complete ? 'completed' : 'was incomplete'}`,
+      data: { checkpointId, complete: restored.value.complete },
+    });
+    if (!restored.value.complete) {
+      this.degrade('A rollback did not fully restore the captured state.');
+      this.runState = 'observation_only';
+    }
+    return restored.value;
+  }
+
+  async getOptimizationResult(outcomeId: string): Promise<OptimizationOutcome | null> {
+    return this.outcomes.get(outcomeId) ?? null;
+  }
+
+  /* ------------------------------------------------------------ optimize */
+
+  async runOptimization(request: {
+    origin: 'user' | 'vesper' | 'internal';
+    requestedBy: string;
+    profileId?: string;
+    dryRun?: boolean;
+    confirmControls?: readonly ControlId[];
+    rollbackPolicy?: ExecutionEnvironment['rollbackPolicy'];
+  }): Promise<OptimizationOutcome> {
+    const workload = await this.analyzeWorkload();
+
+    if (this.options.config.mode === 'observation') {
+      return this.engine.noAction(
+        'observation_only',
+        'NEXUS is in observation mode. Switch to assisted or autonomous mode to allow changes.',
+        workload,
+      );
+    }
+    if (this.runState === 'observation_only') {
+      return this.engine.noAction('degraded', this.degradedReasons.join(' ') || 'NEXUS is observation-only.', workload);
+    }
+    if (this.options.config.mode === 'assisted' && request.origin === 'internal') {
+      return this.engine.noAction(
+        'observation_only',
+        'NEXUS is in assisted mode, so it does not act on its own initiative.',
+        workload,
+      );
+    }
+
+    const chosen = request.profileId
+      ? this.profiles.get(request.profileId)
+      : this.profiles.suggestFor(workload.workload);
+    if (!chosen) {
+      return this.engine.noAction(
+        'no_proposal_generated',
+        request.profileId
+          ? `There is no profile named "${request.profileId}".`
+          : `No profile targets a ${workload.workload} workload.`,
+        workload,
+      );
+    }
+
+    const current = await this.currentControlValues();
+    const proposed = this.engine.propose({
+      workload,
+      profile: chosen.profile,
+      currentValues: current,
+      origin: request.origin,
+      requestedBy: request.requestedBy,
+    });
+
+    if (proposed.kind === 'no_action') {
+      return this.engine.noAction(proposed.reason, proposed.summary, workload);
+    }
+
+    const proposal =
+      request.confirmControls && request.origin === 'user'
+        ? {
+            ...proposed.proposal,
+            confirmation: {
+              confirmedAtMs: this.clock.now(),
+              controls: request.confirmControls,
+              acknowledgement: 'confirmed at the NEXUS command line',
+            },
+          }
+        : proposed.proposal;
+
+    if (request.dryRun) {
+      const verdict = this.kernel.evaluate(proposal, {
+        nowMs: this.clock.now(),
+        runState: this.runState,
+        capabilities: this.capabilities.snapshot(),
+        telemetry: this.telemetry.latest(),
+        baselineAvailable: this.baseline !== null,
+        recentApplications: this.appliedHistory,
+        actuatorFidelity: (control) => this.registry.fidelityOf(control),
+      });
+      const outcome: OptimizationOutcome = {
+        id: this.ids.next('opt'),
+        proposalId: proposal.id,
+        status: verdict.decision === 'allow' ? 'no_action' : verdict.decision === 'reject' ? 'rejected' : 'requires_confirmation',
+        startedAtMs: this.clock.now(),
+        finishedAtMs: this.clock.now(),
+        fidelity: this.registry.combinedFidelity(proposal.changes.map((c) => c.control)),
+        workload: workload.workload,
+        ...(verdict.decision === 'allow' ? { noActionReason: 'observation_only' as const } : {}),
+        verdict,
+        appliedChanges: [],
+        rolledBack: false,
+        checkpointId: null,
+        measurements: [],
+        summary:
+          verdict.decision === 'allow'
+            ? `Dry run: ${proposal.changes.length} change(s) would be applied. Nothing was changed.`
+            : `Dry run: the safety kernel would return "${verdict.decision}".`,
+        findings: verdict.findings,
+      };
+      this.outcomes.set(outcome.id, outcome);
+      return outcome;
+    }
+
+    const beforeSummary = summarize(this.telemetry.history(60_000));
+    const executed = await this.engine.execute(
+      proposal,
+      {
+        runState: this.runState,
+        capabilities: this.capabilities.snapshot(),
+        telemetry: this.telemetry.latest(),
+        baselineAvailable: this.baseline !== null,
+        recentApplications: this.appliedHistory,
+        workload,
+        beforeSummary,
+        measureAfter: async (windowMs) => summarize(this.telemetry.history(windowMs)),
+        onMeasurementWindow: (windowMs) => this.telemetry.enterOptimizationMode(windowMs),
+        ...(request.rollbackPolicy === undefined ? {} : { rollbackPolicy: request.rollbackPolicy }),
+      },
+      this.actuatorContext,
+    );
+
+    this.telemetry.exitOptimizationMode();
+
+    if (!executed.ok) {
+      return this.engine.noAction('unsafe', executed.error.message, workload);
+    }
+
+    const outcome = executed.value;
+    this.outcomes.set(outcome.id, outcome);
+    for (const change of outcome.appliedChanges) {
+      this.appliedHistory.push({ control: change.control, appliedAtMs: change.appliedAtMs });
+    }
+    if (outcome.status === 'applied_kept') {
+      this.activeProfileId = chosen.profile.id;
+      this.activeProfileAppliedAtMs = this.clock.now();
+      await this.eventLog.append({
+        kind: 'profile.activated',
+        severity: 'notice',
+        message: `profile "${chosen.profile.id}" is now active`,
+      });
+    }
+    if (outcome.status === 'applied_unverified') {
+      this.degrade(outcome.summary);
+      this.runState = 'observation_only';
+    }
+    return outcome;
+  }
+
+  /* ------------------------------------------------------------ shutdown */
+
+  /**
+   * Ordered shutdown:
+   *   stop accepting new work -> stop sampling -> close the Vesper endpoint ->
+   *   flush the session record -> release the lock -> exit.
+   *
+   * Bounded: each step has a deadline, so shutdown cannot hang.
+   */
+  async shutdown(reason: string, timeoutMs = 10_000): Promise<void> {
+    if (this.shuttingDown) return;
+    this.shuttingDown = true;
+    this.runState = 'stopping';
+    this.logger.info('shutting down', { reason });
+
+    const deadline = async <T>(label: string, fn: () => Promise<T>): Promise<void> => {
+      try {
+        await Promise.race([
+          fn(),
+          new Promise<void>((_, rejectWith) =>
+            setTimeout(() => rejectWith(new Error(`${label} did not finish in time`)), timeoutMs).unref?.(),
+          ),
+        ]);
+      } catch (e) {
+        this.logger.warn('shutdown step failed', { step: label, error: String(e) });
+      }
+    };
+
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+
+    // Background initialization may still be writing state. Let it finish
+    // before tearing anything down, so shutdown does not race a half-written
+    // baseline or capability probe.
+    await deadline('initialization', async () => {
+      if (this.backgroundInit) await this.backgroundInit;
+    });
+
+    await deadline('telemetry', () => this.telemetry.stop());
+    await deadline('vesper', async () => {
+      if (this.vesper) await this.vesper.stop();
+      this.vesper = null;
+    });
+    await deadline('audit', async () => {
+      await this.eventLog.append({
+        kind: 'session.end',
+        severity: 'info',
+        message: `NEXUS shutting down: ${reason}`,
+        data: { uptimeMs: this.clock.now() - this.startedAtMs },
+      });
+      await this.eventLog.prune();
+    });
+    await deadline('journal', () => this.journal.prune().then(() => undefined));
+    await deadline('session', () => this.sessions.end('stopped'));
+    await deadline('lock', () => this.lock.release());
+
+    this.runState = 'stopped';
+    this.logger.info('shutdown complete');
+  }
+
+  /** Install signal handlers so a console Ctrl+C shuts down in order. */
+  installSignalHandlers(onExit?: () => void): () => void {
+    const handler = (signal: NodeJS.Signals): void => {
+      void this.shutdown(`received ${signal}`).then(() => onExit?.());
+    };
+    process.on('SIGINT', handler);
+    process.on('SIGTERM', handler);
+    return () => {
+      process.off('SIGINT', handler);
+      process.off('SIGTERM', handler);
+    };
+  }
+
+  /* -------------------------------------------------------------- access */
+
+  get telemetryPipeline(): TelemetryPipeline {
+    return this.telemetry;
+  }
+
+  get capabilityRegistry(): CapabilityRegistry {
+    return this.capabilities;
+  }
+
+  get profileStore(): ProfileStore {
+    return this.profiles;
+  }
+
+  get checkpointStore(): CheckpointStore {
+    return this.checkpoints;
+  }
+
+  get baselineStore(): BaselineStore {
+    return this.baselines;
+  }
+
+  get auditLog(): EventLog {
+    return this.eventLog;
+  }
+
+  get inventorySnapshot(): HardwareInventory | null {
+    return this.inventory;
+  }
+
+  get actuatorRegistry(): ActuatorRegistry {
+    return this.registry;
+  }
+
+  get safetyKernel(): SafetyKernel {
+    return this.kernel;
+  }
+
+  get currentRunState(): RunState {
+    return this.runState;
+  }
+
+  get previousSessionShutdown(): ShutdownKind {
+    return this.previousShutdown;
+  }
+
+  get capabilityFidelity(): Fidelity {
+    return this.inventory?.fidelity ?? 'unavailable';
+  }
+
+  get lastSession(): Promise<SessionRecord | null> {
+    return this.sessions.previous();
+  }
+
+  static describeError(e: unknown): NexusError {
+    return toNexusError(e);
+  }
+}

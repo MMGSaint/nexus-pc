@@ -1,0 +1,662 @@
+/**
+ * The optimization engine.
+ *
+ *   OBSERVE -> BASELINE -> PROPOSE -> VALIDATE -> APPLY -> MEASURE -> KEEP/ROLLBACK
+ *
+ * Design commitments:
+ *
+ *  - Doing nothing is a first-class outcome. `NO_ACTION` with a reason is a
+ *    success, not a failure to find something to do.
+ *  - Nothing is written before a checkpoint exists. If the prior values cannot
+ *    be captured, the operation stops there.
+ *  - Every step is journalled before it happens, so a crash mid-apply is
+ *    recoverable rather than a mystery.
+ *  - A change that cannot be verified is rolled back. If the rollback itself
+ *    cannot be verified, the engine reports `applied_unverified` and the
+ *    runtime drops to observation-only. It never reports success it cannot
+ *    demonstrate.
+ *  - The outcome's fidelity is the weakest of the actuators involved, so a run
+ *    against mock adapters is labelled `mocked` no matter who asked for it.
+ */
+
+import type { Clock } from '../core/clock.js';
+import type { NexusError } from '../core/errors.js';
+import type { Fidelity } from '../core/fidelity.js';
+import { combineFidelity } from '../core/fidelity.js';
+import type { IdSource } from '../core/ids.js';
+import type { Logger } from '../core/logger.js';
+import type { Result } from '../core/result.js';
+import { err, ok } from '../core/result.js';
+import { structurallyEqual } from '../core/canonical-json.js';
+import type { CapabilityId, CapabilityRecord } from '../domain/capability.js';
+import type { ControlId, ControlValue } from '../domain/control.js';
+import type { RunState } from '../domain/health.js';
+import type {
+  AppliedChange,
+  NoActionReason,
+  OptimizationOutcome,
+  OptimizationProposal,
+  OutcomeReport,
+  ProposedChange,
+  RequestOrigin,
+  SafetyFinding,
+} from '../domain/optimization.js';
+import type { ProfileDocument } from '../domain/profile.js';
+import type { TelemetrySnapshot, TelemetrySummary } from '../domain/telemetry.js';
+import type { WorkloadClassification } from '../domain/workload.js';
+import { MIN_ACTIONABLE_CONFIDENCE } from '../domain/workload.js';
+import type { EventLog } from '../audit/eventlog.js';
+import type { CheckpointStore } from '../checkpoint/store.js';
+import type { SafetyContext } from '../safety/kernel.js';
+import type { SafetyKernel } from '../safety/kernel.js';
+import type { ActuatorContext , ActuatorRegistry} from './actuator.js';
+import { writeAndVerify } from './actuator.js';
+import type { OperationJournal } from './journal.js';
+import {
+  compare,
+  findRegressions,
+  hasMeasurableBenefit,
+  measurementIsUsable,
+} from './measure.js';
+
+export type RollbackPolicy =
+  /** Keep the change unless a regression was measured. The default. */
+  | 'on_regression'
+  /** Keep only if a benefit was measured. Used for validation runs. */
+  | 'unless_benefit';
+
+export interface EngineOptions {
+  readonly clock: Clock;
+  readonly logger: Logger;
+  readonly ids: IdSource;
+  readonly kernel: SafetyKernel;
+  readonly registry: ActuatorRegistry;
+  readonly checkpoints: CheckpointStore;
+  readonly journal: OperationJournal;
+  readonly eventLog: Pick<EventLog, 'append'>;
+  /** Injected so tests do not spend real time in the measurement window. */
+  readonly wait?: (ms: number) => Promise<void>;
+}
+
+export interface ExecutionEnvironment {
+  readonly runState: RunState;
+  readonly capabilities: ReadonlyMap<CapabilityId, CapabilityRecord>;
+  readonly telemetry: TelemetrySnapshot | null;
+  readonly baselineAvailable: boolean;
+  readonly recentApplications: readonly { control: ControlId; appliedAtMs: number }[];
+  readonly workload: WorkloadClassification;
+  /** Summary of the window before the change. */
+  readonly beforeSummary: TelemetrySummary;
+  /** Called to obtain the post-change summary after the measurement window. */
+  readonly measureAfter: (windowMs: number) => Promise<TelemetrySummary>;
+  /** Raises telemetry resolution for the measurement window. */
+  readonly onMeasurementWindow?: (windowMs: number) => void;
+  readonly rollbackPolicy?: RollbackPolicy;
+}
+
+export interface ProposalContext {
+  readonly workload: WorkloadClassification;
+  readonly profile: ProfileDocument;
+  readonly currentValues: ReadonlyMap<ControlId, ControlValue | null>;
+  readonly origin: RequestOrigin;
+  readonly requestedBy: string;
+}
+
+export type ProposalResult =
+  | { readonly kind: 'proposal'; readonly proposal: OptimizationProposal }
+  | { readonly kind: 'no_action'; readonly reason: NoActionReason; readonly summary: string };
+
+export class OptimizationEngine {
+  private readonly options: EngineOptions;
+  private readonly wait: (ms: number) => Promise<void>;
+
+  constructor(options: EngineOptions) {
+    this.options = options;
+    this.wait = options.wait ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.()));
+  }
+
+  /**
+   * Build a proposal from a profile and the machine's current state, or
+   * explain why there is nothing worth doing.
+   */
+  propose(context: ProposalContext): ProposalResult {
+    if (context.workload.workload === 'unknown') {
+      return {
+        kind: 'no_action',
+        reason: 'low_confidence',
+        summary: 'The workload could not be classified, so there is nothing to optimise for.',
+      };
+    }
+    if (context.workload.confidence < MIN_ACTIONABLE_CONFIDENCE) {
+      return {
+        kind: 'no_action',
+        reason: 'low_confidence',
+        summary: `Workload "${context.workload.workload}" was classified with only ${(context.workload.confidence * 100).toFixed(0)}% confidence, below the ${(MIN_ACTIONABLE_CONFIDENCE * 100).toFixed(0)}% floor for acting.`,
+      };
+    }
+
+    const changes: ProposedChange[] = [];
+    const unchanged: string[] = [];
+
+    for (const setting of context.profile.settings) {
+      if (!this.options.registry.has(setting.control)) continue;
+      const current = context.currentValues.get(setting.control);
+      if (current !== undefined && structurallyEqual(current, setting.value)) {
+        unchanged.push(setting.control);
+        continue;
+      }
+      changes.push({
+        control: setting.control,
+        targetValue: setting.value,
+        rationale: setting.rationale,
+        expectedEffect: `Move ${setting.control} to ${JSON.stringify(setting.value)} for a ${context.workload.workload} workload.`,
+      });
+    }
+
+    if (changes.length === 0) {
+      return {
+        kind: 'no_action',
+        reason: unchanged.length > 0 ? 'already_optimal' : 'no_proposal_generated',
+        summary:
+          unchanged.length > 0
+            ? `Every setting in profile "${context.profile.id}" already holds its target value. No change is required.`
+            : `Profile "${context.profile.id}" has no settings that can be applied on this machine.`,
+      };
+    }
+
+    return {
+      kind: 'proposal',
+      proposal: {
+        id: this.options.ids.next('prop'),
+        createdAtMs: this.options.clock.now(),
+        origin: context.origin,
+        requestedBy: context.requestedBy,
+        workload: context.workload.workload,
+        changes,
+        profileId: context.profile.id,
+      },
+    };
+  }
+
+  /** Run the full validate → apply → measure → decide pipeline. */
+  async execute(
+    proposal: OptimizationProposal,
+    environment: ExecutionEnvironment,
+    actuatorContext: ActuatorContext,
+  ): Promise<Result<OptimizationOutcome, NexusError>> {
+    const startedAtMs = this.options.clock.now();
+    const outcomeId = this.options.ids.next('opt');
+    const controls = proposal.changes.map((c) => c.control);
+    const fidelity = this.options.registry.combinedFidelity(controls);
+    const log = this.options.logger.child('engine');
+
+    await this.options.eventLog.append({
+      kind: 'optimization.requested',
+      severity: 'info',
+      message: `${proposal.origin} requested ${proposal.changes.length} change(s) for a ${proposal.workload} workload`,
+      correlationId: outcomeId,
+      data: { proposalId: proposal.id, controls, requestedBy: proposal.requestedBy },
+    });
+
+    /* ------------------------------------------------------------ VALIDATE */
+
+    const safetyContext: SafetyContext = {
+      nowMs: this.options.clock.now(),
+      runState: environment.runState,
+      capabilities: environment.capabilities,
+      telemetry: environment.telemetry,
+      baselineAvailable: environment.baselineAvailable,
+      recentApplications: environment.recentApplications.map((r) => ({
+        control: r.control,
+        appliedAtMs: r.appliedAtMs,
+      })),
+      actuatorFidelity: (control) => this.options.registry.fidelityOf(control),
+    };
+
+    const verdict = this.options.kernel.evaluate(proposal, safetyContext);
+
+    if (verdict.decision !== 'allow') {
+      const status = verdict.decision === 'reject' ? 'rejected' : 'requires_confirmation';
+      await this.options.eventLog.append({
+        kind: 'optimization.rejected',
+        severity: verdict.decision === 'reject' ? 'notice' : 'info',
+        message: `Safety kernel returned "${verdict.decision}"`,
+        correlationId: outcomeId,
+        data: { findings: verdict.findings.map((f) => `${f.severity}:${f.code}`) },
+      });
+      return ok(
+        this.outcome({
+          id: outcomeId,
+          proposal,
+          status,
+          startedAtMs,
+          fidelity,
+          verdict,
+          summary: summarizeVerdict(verdict.decision, verdict.findings),
+          findings: verdict.findings,
+        }),
+      );
+    }
+
+    await this.options.eventLog.append({
+      kind: 'optimization.validated',
+      severity: 'info',
+      message: `Safety kernel permitted ${verdict.permitted.length} change(s)`,
+      correlationId: outcomeId,
+      data: { policyDigest: verdict.policyDigest },
+    });
+
+    /* ----------------------------------------------------------- JOURNAL */
+
+    const journalled = await this.options.journal.record(outcomeId, proposal.id, controls);
+    if (!journalled.ok) return err(journalled.error);
+    let record = journalled.value;
+
+    /* -------------------------------------------------------- CHECKPOINT */
+
+    const checkpoint = await this.options.checkpoints.capture(
+      controls,
+      `before applying proposal ${proposal.id}`,
+      actuatorContext,
+      outcomeId,
+    );
+    if (!checkpoint.ok) {
+      await this.options.journal.advance(record, 'failed', `checkpoint failed: ${checkpoint.error.message}`);
+      return ok(
+        this.outcome({
+          id: outcomeId,
+          proposal,
+          status: 'failed',
+          startedAtMs,
+          fidelity,
+          verdict,
+          summary: `Could not capture a checkpoint, so nothing was changed: ${checkpoint.error.message}`,
+          findings: verdict.findings,
+        }),
+      );
+    }
+
+    // A checkpoint that could not capture every control means at least one
+    // change could not be undone. That is not a risk NEXUS takes on its own.
+    if (checkpoint.value.partial) {
+      const unrestorable = checkpoint.value.entries.filter((e) => !e.restorable).map((e) => e.control);
+      await this.options.journal.advance(record, 'abandoned', 'checkpoint was incomplete', {
+        checkpointId: checkpoint.value.id,
+      });
+      await this.options.eventLog.append({
+        kind: 'optimization.no_action',
+        severity: 'notice',
+        message: 'Refused to apply: the prior state of some controls could not be captured',
+        correlationId: outcomeId,
+        data: { unrestorable },
+      });
+      return ok(
+        this.outcome({
+          id: outcomeId,
+          proposal,
+          status: 'no_action',
+          startedAtMs,
+          fidelity,
+          verdict,
+          noActionReason: 'unsafe',
+          checkpointId: checkpoint.value.id,
+          summary: `Nothing was changed. The current value of ${unrestorable.join(', ')} could not be read, so the change could not be reversed.`,
+          findings: verdict.findings,
+        }),
+      );
+    }
+
+    await this.options.eventLog.append({
+      kind: 'checkpoint.created',
+      severity: 'info',
+      message: `Captured prior values for ${controls.length} control(s)`,
+      correlationId: outcomeId,
+      data: { checkpointId: checkpoint.value.id },
+    });
+
+    const advanced = await this.options.journal.advance(record, 'checkpointed', 'prior values captured', {
+      checkpointId: checkpoint.value.id,
+    });
+    if (!advanced.ok) return err(advanced.error);
+    record = advanced.value;
+
+    /* -------------------------------------------------------------- APPLY */
+
+    const applying = await this.options.journal.advance(record, 'applying', 'issuing writes');
+    if (!applying.ok) return err(applying.error);
+    record = applying.value;
+
+    const applied: AppliedChange[] = [];
+    const appliedControls: ControlId[] = [];
+    let applyFailure: string | null = null;
+
+    for (const change of verdict.permitted) {
+      const adapter = this.options.registry.get(change.control);
+      if (!adapter) {
+        applyFailure = `no adapter for ${change.control}`;
+        break;
+      }
+      const previous = checkpoint.value.entries.find((e) => e.control === change.control)?.previousValue ?? null;
+      const written = await writeAndVerify(adapter, actuatorContext, change.targetValue);
+      if (!written.ok) {
+        applyFailure = `${change.control}: ${written.error.message}`;
+        break;
+      }
+      appliedControls.push(change.control);
+      applied.push({
+        control: change.control,
+        previousValue: previous,
+        appliedValue: change.targetValue,
+        verified: written.value.verified,
+        appliedAtMs: this.options.clock.now(),
+        ...(written.value.verified
+          ? {}
+          : { note: `read back ${JSON.stringify(written.value.observed)} instead` }),
+      });
+      const progressed = await this.options.journal.advance(record, 'applying', `applied ${change.control}`, {
+        appliedControls: [...appliedControls],
+      });
+      if (progressed.ok) record = progressed.value;
+      if (!written.value.verified) {
+        applyFailure = `${change.control} did not take the requested value`;
+        break;
+      }
+    }
+
+    if (applyFailure !== null) {
+      log.warn('apply failed; rolling back', { reason: applyFailure });
+      return ok(
+        await this.rollbackAndReport({
+          outcomeId,
+          proposal,
+          startedAtMs,
+          fidelity,
+          verdict,
+          record,
+          checkpointId: checkpoint.value.id,
+          applied,
+          appliedControls,
+          actuatorContext,
+          reason: `The change could not be applied cleanly (${applyFailure}).`,
+          measurements: [],
+        }),
+      );
+    }
+
+    const appliedRecord = await this.options.journal.advance(record, 'applied', 'all writes verified', {
+      appliedControls: [...appliedControls],
+    });
+    if (appliedRecord.ok) record = appliedRecord.value;
+
+    await this.options.eventLog.append({
+      kind: 'optimization.applied',
+      severity: 'notice',
+      message: `Applied ${applied.length} change(s)`,
+      correlationId: outcomeId,
+      data: { changes: applied.map((a) => ({ control: a.control, from: a.previousValue, to: a.appliedValue })) },
+    });
+
+    /* ------------------------------------------------------------ MEASURE */
+
+    const windowMs = this.options.kernel.effectivePolicy.global.minMeasurementWindowMs;
+    const measuring = await this.options.journal.advance(record, 'measuring', `measuring for ${windowMs}ms`);
+    if (measuring.ok) record = measuring.value;
+
+    environment.onMeasurementWindow?.(windowMs);
+    await this.wait(windowMs);
+    const afterSummary = await environment.measureAfter(windowMs);
+    const measurements = compare(environment.beforeSummary, afterSummary);
+
+    await this.options.eventLog.append({
+      kind: 'optimization.measured',
+      severity: 'info',
+      message: 'Measurement window complete',
+      correlationId: outcomeId,
+      data: {
+        significant: measurements.filter((m) => m.significant).map((m) => `${m.metric}:${m.delta?.toFixed(2)}`),
+      },
+    });
+
+    /* -------------------------------------------------------- KEEP/ROLLBACK */
+
+    const usable = measurementIsUsable(environment.beforeSummary, afterSummary);
+    const regressions = usable ? findRegressions(measurements) : [];
+    const benefit = usable && hasMeasurableBenefit(measurements);
+    const policy = environment.rollbackPolicy ?? 'on_regression';
+
+    let rollbackReason: string | null = null;
+    if (!usable) {
+      rollbackReason =
+        'The effect could not be measured — telemetry produced nothing usable during the window — so the change is being reverted rather than kept on faith.';
+    } else if (regressions.length > 0) {
+      rollbackReason = `A regression was measured: ${regressions.map((r) => r.message).join('; ')}.`;
+    } else if (policy === 'unless_benefit' && !benefit) {
+      rollbackReason = 'No measurable benefit was observed, and this run was configured to keep only measured wins.';
+    }
+
+    if (rollbackReason !== null) {
+      return ok(
+        await this.rollbackAndReport({
+          outcomeId,
+          proposal,
+          startedAtMs,
+          fidelity,
+          verdict,
+          record,
+          checkpointId: checkpoint.value.id,
+          applied,
+          appliedControls,
+          actuatorContext,
+          reason: rollbackReason,
+          measurements,
+        }),
+      );
+    }
+
+    const committed = await this.options.journal.advance(record, 'committed', 'change kept');
+    if (committed.ok) record = committed.value;
+
+    await this.options.eventLog.append({
+      kind: 'optimization.kept',
+      severity: 'notice',
+      message: benefit ? 'Change kept; a benefit was measured' : 'Change kept; no regression was measured',
+      correlationId: outcomeId,
+    });
+
+    return ok(
+      this.outcome({
+        id: outcomeId,
+        proposal,
+        status: 'applied_kept',
+        startedAtMs,
+        fidelity,
+        verdict,
+        applied,
+        checkpointId: checkpoint.value.id,
+        measurements,
+        summary: benefit
+          ? `Applied ${applied.length} change(s) and measured an improvement.`
+          : `Applied ${applied.length} change(s). No regression was measured, but no improvement was measurable either.`,
+        findings: verdict.findings,
+      }),
+    );
+  }
+
+  private async rollbackAndReport(args: {
+    outcomeId: string;
+    proposal: OptimizationProposal;
+    startedAtMs: number;
+    fidelity: Fidelity;
+    verdict: OptimizationOutcome['verdict'];
+    record: Parameters<OperationJournal['advance']>[0];
+    checkpointId: string;
+    applied: readonly AppliedChange[];
+    appliedControls: readonly ControlId[];
+    actuatorContext: ActuatorContext;
+    reason: string;
+    measurements: OptimizationOutcome['measurements'];
+  }): Promise<OptimizationOutcome> {
+    if (args.appliedControls.length === 0) {
+      await this.options.journal.advance(args.record, 'abandoned', 'nothing was applied');
+      return this.outcome({
+        id: args.outcomeId,
+        proposal: args.proposal,
+        status: 'failed',
+        startedAtMs: args.startedAtMs,
+        fidelity: args.fidelity,
+        ...(args.verdict === undefined ? {} : { verdict: args.verdict }),
+        checkpointId: args.checkpointId,
+        measurements: args.measurements,
+        summary: `${args.reason} Nothing had been changed, so there was nothing to revert.`,
+        findings: args.verdict?.findings ?? [],
+      });
+    }
+
+    const restored = await this.options.checkpoints.restore(
+      args.checkpointId,
+      args.actuatorContext,
+      args.appliedControls,
+    );
+
+    if (!restored.ok || !restored.value.complete) {
+      // Fail closed: the machine may be in a state NEXUS did not intend and
+      // cannot confirm. Say so plainly rather than reporting a tidy rollback.
+      const detail = restored.ok
+        ? restored.value.entries.filter((e) => !e.restored || !e.verified).map((e) => `${e.control}: ${e.message}`).join('; ')
+        : restored.error.message;
+      await this.options.journal.advance(args.record, 'failed', `rollback incomplete: ${detail}`);
+      await this.options.eventLog.append({
+        kind: 'checkpoint.restore_failed',
+        severity: 'critical',
+        message: 'Rollback did not fully restore the previous state',
+        correlationId: args.outcomeId,
+        data: { checkpointId: args.checkpointId, detail },
+      });
+      return this.outcome({
+        id: args.outcomeId,
+        proposal: args.proposal,
+        status: 'applied_unverified',
+        startedAtMs: args.startedAtMs,
+        fidelity: args.fidelity,
+        ...(args.verdict === undefined ? {} : { verdict: args.verdict }),
+        applied: args.applied,
+        checkpointId: args.checkpointId,
+        measurements: args.measurements,
+        rolledBack: false,
+        summary: `${args.reason} The rollback did not complete (${detail}). NEXUS cannot confirm the machine's current state and is treating it as unverified.`,
+        findings: args.verdict?.findings ?? [],
+      });
+    }
+
+    await this.options.journal.advance(args.record, 'rolled_back', args.reason);
+    await this.options.eventLog.append({
+      kind: 'rollback.performed',
+      severity: 'notice',
+      message: 'Rolled back to the captured state',
+      correlationId: args.outcomeId,
+      data: { checkpointId: args.checkpointId, reason: args.reason },
+    });
+
+    return this.outcome({
+      id: args.outcomeId,
+      proposal: args.proposal,
+      status: 'applied_rolled_back',
+      startedAtMs: args.startedAtMs,
+      fidelity: args.fidelity,
+      ...(args.verdict === undefined ? {} : { verdict: args.verdict }),
+      applied: args.applied,
+      checkpointId: args.checkpointId,
+      measurements: args.measurements,
+      rolledBack: true,
+      summary: `${args.reason} The previous state has been restored and verified.`,
+      findings: args.verdict?.findings ?? [],
+    });
+  }
+
+  private outcome(args: {
+    id: string;
+    proposal: OptimizationProposal | null;
+    status: OptimizationOutcome['status'];
+    startedAtMs: number;
+    fidelity: Fidelity;
+    verdict?: OptimizationOutcome['verdict'];
+    noActionReason?: NoActionReason;
+    applied?: readonly AppliedChange[];
+    checkpointId?: string;
+    measurements?: OptimizationOutcome['measurements'];
+    rolledBack?: boolean;
+    summary: string;
+    findings: readonly SafetyFinding[];
+  }): OptimizationOutcome {
+    return {
+      id: args.id,
+      proposalId: args.proposal?.id ?? null,
+      status: args.status,
+      startedAtMs: args.startedAtMs,
+      finishedAtMs: this.options.clock.now(),
+      fidelity: args.fidelity,
+      workload: args.proposal?.workload ?? 'unknown',
+      ...(args.noActionReason === undefined ? {} : { noActionReason: args.noActionReason }),
+      ...(args.verdict === undefined ? {} : { verdict: args.verdict }),
+      appliedChanges: args.applied ?? [],
+      rolledBack: args.rolledBack ?? false,
+      checkpointId: args.checkpointId ?? null,
+      measurements: args.measurements ?? [],
+      summary: args.summary,
+      findings: args.findings,
+    };
+  }
+
+  /** Build the no-action outcome for a decision made before any proposal. */
+  noAction(reason: NoActionReason, summary: string, workload: WorkloadClassification): OptimizationOutcome {
+    const now = this.options.clock.now();
+    return {
+      id: this.options.ids.next('opt'),
+      proposalId: null,
+      status: 'no_action',
+      startedAtMs: now,
+      finishedAtMs: now,
+      fidelity: combineFidelity(workload.fidelity),
+      workload: workload.workload,
+      noActionReason: reason,
+      appliedChanges: [],
+      rolledBack: false,
+      checkpointId: null,
+      measurements: [],
+      summary,
+      findings: [],
+    };
+  }
+}
+
+function summarizeVerdict(decision: string, findings: readonly SafetyFinding[]): string {
+  const blocking = findings.filter((f) => f.severity === 'blocking');
+  if (decision === 'requires-confirmation') {
+    return 'This change needs explicit human confirmation before NEXUS will apply it.';
+  }
+  if (blocking.length === 0) return 'The safety kernel refused the request.';
+  return `Refused: ${blocking.map((f) => f.message).join(' ')}`;
+}
+
+/** Structured result an orchestrator such as Vesper can learn from. */
+export function toOutcomeReport(outcome: OptimizationOutcome, recommendation: string): OutcomeReport {
+  const result: OutcomeReport['result'] =
+    outcome.status === 'applied_kept'
+      ? hasMeasurableBenefit(outcome.measurements)
+        ? 'benefit'
+        : 'no_measurable_benefit'
+      : outcome.status === 'applied_rolled_back'
+        ? 'regression'
+        : outcome.status === 'applied_unverified'
+          ? 'unverified'
+          : 'not_applied';
+
+  return {
+    outcomeId: outcome.id,
+    recommendation,
+    observed: outcome.summary,
+    result,
+    measurements: outcome.measurements,
+    fidelity: outcome.fidelity,
+  };
+}
