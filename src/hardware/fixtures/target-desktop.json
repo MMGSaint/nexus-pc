@@ -1,0 +1,70 @@
+{
+  "$comment": "Fixture describing the intended NEXUS target machine. This is a MODEL of that hardware, used for development and tests. Anything derived from it is labelled 'mocked' and can never be reported as a live measurement.",
+  "id": "target-desktop",
+  "description": "Ryzen 9 9950X / Radeon RX 7900 XT 20GB / 96GB DDR5 / Windows 11",
+  "cpu": {
+    "model": "AMD Ryzen 9 9950X 16-Core Processor",
+    "vendor": "AuthenticAMD",
+    "family": "AMD64 Family 26 Model 68 Stepping 0",
+    "physicalCores": 16,
+    "logicalProcessors": 32,
+    "baseClockMhz": null,
+    "maxClockMhz": 4300,
+    "socket": "AM5",
+    "architecture": "64-bit",
+    "features": ["smt", "avx2", "avx512"]
+  },
+  "gpus": [
+    {
+      "index": 0,
+      "model": "AMD Radeon RX 7900 XT",
+      "vendor": "Advanced Micro Devices, Inc.",
+      "vramBytes": 21474836480,
+      "vramSource": "fixture",
+      "driverVersion": "32.0.11029.1005",
+      "driverDateIso": "2025-01-15T00:00:00.000Z",
+      "pnpDeviceId": "PCI\\VEN_1002&DEV_744C&SUBSYS_FIXTURE"
+    }
+  ],
+  "memory": {
+    "totalBytes": 103012106240,
+    "installedBytes": 103079215104,
+    "availableBytes": 78000000000,
+    "moduleCount": 2,
+    "configuredSpeedMhz": 6000,
+    "ratedSpeedMhz": 6000,
+    "memoryType": "DDR5",
+    "availableSource": "fixture"
+  },
+  "os": {
+    "platform": "win32",
+    "name": "Microsoft Windows 11 Pro",
+    "version": "10.0.26100",
+    "build": "26100",
+    "architecture": "64-bit",
+    "kernel": null
+  },
+  "storage": [
+    {
+      "id": "0",
+      "model": "Fixture NVMe SSD 2TB",
+      "busType": "NVMe",
+      "mediaType": "SSD",
+      "sizeBytes": 2000398934016,
+      "freeBytes": 900000000000,
+      "isSystemDisk": true
+    }
+  ],
+  "power": {
+    "activeSchemeId": "381b4222-f694-41f0-9685-ff5bb260df2e",
+    "activeSchemeName": "Balanced",
+    "availableSchemes": [
+      { "id": "381b4222-f694-41f0-9685-ff5bb260df2e", "name": "Balanced" },
+      { "id": "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c", "name": "High performance" },
+      { "id": "a1841308-3541-4fab-bc81-f71556f20b4a", "name": "Power saver" }
+    ],
+    "hasBattery": false
+  },
+  "machineIdSeed": "fixture-target-desktop",
+  "warnings": []
+}

@@ -1,0 +1,38 @@
+{
+  "name": "nexus-pc",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NEXUS — hardware and performance specialist agent for Windows desktops",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "bin": {
+    "nexus": "./dist/cli/main.js"
+  },
+  "files": [
+    "dist",
+    "scripts",
+    "docs"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:security": "vitest run tests/security",
+    "verify": "npm run typecheck && npm run lint && npm run build && npm run test",
+    "nexus": "node --enable-source-maps dist/cli/main.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "eslint": "^9.17.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1",
+    "vitest": "^2.1.8"
+  }
+}
