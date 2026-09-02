@@ -1,0 +1,1 @@
+Use /nexus-orchestrator for this task. Inspect the current NEXUS repo/state first, select the smallest sufficient specialist skills, and route cross-cutting work in dependency order. Do not load every skill by default.

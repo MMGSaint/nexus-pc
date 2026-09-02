@@ -1,0 +1,1 @@
+Use /nexus-optimizer. Express the request as measurable objectives with hard constraints and an experiment procedure. Choose the simplest justified search method. The optimizer proposes actions; the safety governor decides whether they are admissible.

@@ -1,0 +1,1 @@
+Use /nexus-safety. Treat this as an actuation/safety-sensitive change. Review hard limits, capability, preconditions, hysteresis/deadband, dwell/cooldown, telemetry-loss behavior, instability detection, recovery, and rollback. Do not weaken safety for convenience.

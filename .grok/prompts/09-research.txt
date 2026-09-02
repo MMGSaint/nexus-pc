@@ -1,0 +1,1 @@
+Use /nexus-research. Search official docs and active upstream projects before inventing infrastructure. Evaluate current maintenance, compatibility, overhead, API shape, issues, license, and whether the project should be reused, wrapped, studied, tested against, or rejected.

@@ -1,0 +1,1 @@
+Use /nexus-control. Design or implement the smallest bounded actuation adapter. Require capability detection, allowed ranges, readback, verification, failure handling, rollback, and provenance review for third-party backends.

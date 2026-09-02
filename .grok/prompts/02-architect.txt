@@ -1,0 +1,1 @@
+Use /nexus-architect. Inspect current code and docs first. Identify current vs desired architecture, affected boundaries, data/control flow, safety implications, migration impact, performance overhead, verification, and rollback. Prefer focused changes.

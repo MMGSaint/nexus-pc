@@ -1,0 +1,1 @@
+Use /nexus-benchmark. Establish a reproducible baseline and paired before/after measurements. Include frame-time/performance, power, thermals, utilization, clocks, and stability where relevant. Quantify tradeoffs and label uncertainty honestly.

@@ -1,0 +1,1 @@
+Use /nexus-provenance. Record project, URL, version/commit, authoritative license, dependency/reference relationship, copied or derived material, notice obligations, and supply-chain concerns. Recommend adapter/reimplementation/avoidance when licensing or provenance is unclear.

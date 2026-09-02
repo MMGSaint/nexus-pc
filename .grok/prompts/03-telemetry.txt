@@ -1,0 +1,1 @@
+Use /nexus-telemetry. Determine what measurements are actually needed, which existing/provider APIs can supply them, their overhead and support, normalization model, sampling/event strategy, and how to prevent noisy telemetry from causing control oscillation.

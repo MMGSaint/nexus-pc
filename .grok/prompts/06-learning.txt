@@ -1,0 +1,1 @@
+Use /nexus-learning. Define what evidence is worth retaining, workload/context features, confidence, update rules, and safe adaptation. Start simpler than reinforcement learning and never allow learned behavior to expand the safety envelope.
