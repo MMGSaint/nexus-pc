@@ -53,8 +53,11 @@ remains a heuristic: a renamed executable defeats it and an unknown game is
 invisible to it. The classifier labels those reasons as heuristics rather than
 presenting them as facts.
 
-Foreground detection is still absent (`isForeground` is always null), so NEXUS
-cannot yet prefer the focused window over a background game.
+Foreground detection is implemented on Windows (Win32 via a fixed PowerShell
+script) and unsupported elsewhere. When the capability is available, matching
+processes are annotated and the classifier prefers a foreground game over a
+background-only name match. When detection fails or is unsupported,
+`isForeground` stays null — which is not treated as background.
 
 ## Measurement is coarse
 

@@ -17,6 +17,8 @@ import type { ActuatorRegistry } from '../optimizer/actuator.js';
 import { getControl } from '../safety/controls.js';
 import type { ProcessEnumerator } from '../process/enumerate.js';
 import { probeProcessEnumeration } from '../process/enumerate.js';
+import type { ForegroundDetector } from '../process/foreground.js';
+import { probeForegroundDetection } from '../process/foreground.js';
 import type { CapabilityProbe, ProbeOutcome } from './registry.js';
 
 function descriptor(
@@ -49,6 +51,8 @@ export interface ProbeSources {
   readonly vesperListening: boolean;
   /** Live process enumerator; probed rather than assumed from code existence. */
   readonly processEnumerator: ProcessEnumerator;
+  /** Foreground window detector; independent of enumeration. */
+  readonly foregroundDetector: ForegroundDetector;
 }
 
 /** Telemetry capabilities and the metric each one depends on. */
@@ -287,6 +291,23 @@ export function buildCapabilityProbes(sources: () => ProbeSources): CapabilityPr
     probe: async (): Promise<ProbeOutcome> => {
       const { processEnumerator } = sources();
       return probeProcessEnumeration(processEnumerator);
+    },
+  });
+
+  probes.push({
+    descriptor: descriptor(
+      'process.foreground',
+      'Foreground window detection',
+      'Identify which enumerated process owns the focused window (Win32 GetForegroundWindow). Unsupported off Windows.',
+      {
+        backend: 'process.foreground',
+        hardwareDependent: true,
+      },
+    ),
+    trust: 'live',
+    probe: async (): Promise<ProbeOutcome> => {
+      const { foregroundDetector } = sources();
+      return probeForegroundDetection(foregroundDetector);
     },
   });
 
