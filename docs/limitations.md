@@ -39,21 +39,22 @@ parsing that could not be validated on Windows in this environment. Until then,
 if you have a hand-tuned power plan, note that NEXUS edits it in place (and can
 put it back).
 
-## Workload classification runs blind to processes
+## Process evidence is optional and heuristic
 
-Process enumeration is not implemented, so classification works from
-utilisation and memory alone. It says so — `process.enumerate` appears in
-`missingSignals` and confidence is capped accordingly.
+Process enumeration is implemented: Linux via `/proc`, Windows via allowlisted
+`tasklist` (hardware-dependent until verified on the target machine). When the
+capability probe fails, classification still runs from utilisation and memory
+alone and lists `process.enumerate` in `missingSignals`, capping confidence.
 
-The practical effect: NEXUS can tell a GPU-bound workload from an idle one, but
-it cannot tell Squad from Where Winds Meet, and it cannot detect that OBS is
-encoding. The process-hint table exists and is tested, but has no live source
-feeding it. This is the single biggest gap for the user's actual workloads, and
-it is where Vesper's context hints are most valuable in the meantime.
+When enumeration succeeds, process names corroborate classification the same
+way a Vesper context hint does — they can raise a candidate's score, never
+override telemetry, and never invent a workload on their own. Name matching
+remains a heuristic: a renamed executable defeats it and an unknown game is
+invisible to it. The classifier labels those reasons as heuristics rather than
+presenting them as facts.
 
-Even with processes, name matching is a heuristic: a renamed executable defeats
-it and an unknown game is invisible to it. The classifier labels those reasons
-as heuristics rather than presenting them as facts.
+Foreground detection is still absent (`isForeground` is always null), so NEXUS
+cannot yet prefer the focused window over a background game.
 
 ## Measurement is coarse
 
