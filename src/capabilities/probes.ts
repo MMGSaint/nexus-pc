@@ -15,6 +15,8 @@ import { isKnown } from '../domain/telemetry.js';
 import type { ActuatorContext } from '../optimizer/actuator.js';
 import type { ActuatorRegistry } from '../optimizer/actuator.js';
 import { getControl } from '../safety/controls.js';
+import type { ProcessEnumerator } from '../process/enumerate.js';
+import { probeProcessEnumeration } from '../process/enumerate.js';
 import type { CapabilityProbe, ProbeOutcome } from './registry.js';
 
 function descriptor(
@@ -45,6 +47,8 @@ export interface ProbeSources {
   readonly actuatorContext: ActuatorContext;
   readonly platform: NodeJS.Platform;
   readonly vesperListening: boolean;
+  /** Live process enumerator; probed rather than assumed from code existence. */
+  readonly processEnumerator: ProcessEnumerator;
 }
 
 /** Telemetry capabilities and the metric each one depends on. */
@@ -269,17 +273,29 @@ export function buildCapabilityProbes(sources: () => ProbeSources): CapabilityPr
     });
   }
 
+  probes.push({
+    descriptor: descriptor(
+      'process.enumerate',
+      'Process enumeration',
+      'List running processes (name, pid, optional working set) for workload corroboration.',
+      {
+        backend: 'process.enumerate',
+        hardwareDependent: true,
+      },
+    ),
+    trust: 'live',
+    probe: async (): Promise<ProbeOutcome> => {
+      const { processEnumerator } = sources();
+      return probeProcessEnumeration(processEnumerator);
+    },
+  });
+
   /*
    * Declared but not implemented in this version. They are registered so a
    * request that depends on them is refused with a precise reason rather than
    * "unknown capability", and so `nexus doctor` lists them as known gaps.
    */
   for (const [id, name, reason] of [
-    [
-      'process.enumerate',
-      'Process enumeration',
-      'process enumeration is not implemented in this version, so workload classification runs without process evidence',
-    ],
     [
       'process.priority.write',
       'Process priority control',

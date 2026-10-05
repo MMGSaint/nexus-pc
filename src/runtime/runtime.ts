@@ -38,7 +38,7 @@ import type { ProfileDocument } from '../domain/profile.js';
 import { OBSERVATION_PROFILE_ID } from '../domain/profile.js';
 import type { HardwareInventory } from '../domain/hardware.js';
 import type { TelemetrySnapshot, TelemetrySummary } from '../domain/telemetry.js';
-import type { ContextHint, WorkloadClassification } from '../domain/workload.js';
+import type { ContextHint, ProcessObservation, WorkloadClassification } from '../domain/workload.js';
 import { hintIsFresh } from '../domain/workload.js';
 
 import { EventLog } from '../audit/eventlog.js';
@@ -71,6 +71,8 @@ import { SelfTelemetrySource } from '../telemetry/sources/self.js';
 import { SensorBridgeSource } from '../telemetry/sources/sensor-bridge.js';
 import { WindowsTelemetrySource } from '../telemetry/sources/windows.js';
 import { summarize } from '../telemetry/summary.js';
+import { createProcessEnumerator } from '../process/enumerate.js';
+import type { ProcessEnumerator } from '../process/enumerate.js';
 import { WorkloadClassifier, signalsFromSnapshot } from '../workload/classifier.js';
 import { ensureToken } from '../vesper/auth.js';
 import type { ProfileView, RecommendationView, VesperHost } from '../vesper/handlers.js';
@@ -120,6 +122,7 @@ export class NexusRuntime implements VesperHost {
   private readonly capabilities: CapabilityRegistry;
   private readonly telemetry: TelemetryPipeline;
   private readonly classifier = new WorkloadClassifier();
+  private readonly processEnumerator: ProcessEnumerator;
   private readonly discovery = new HardwareDiscovery();
   private readonly eventLog: EventLog;
   private readonly sessions: SessionStore;
@@ -155,6 +158,11 @@ export class NexusRuntime implements VesperHost {
     this.ids = options.ids ?? systemIds;
     this.runner = options.runner ?? new NodeCommandRunner();
     this.platform = options.platform ?? process.platform;
+    this.processEnumerator = createProcessEnumerator({
+      platform: this.platform,
+      runner: this.runner,
+      clock: this.clock,
+    });
     this.sessionId = this.ids.next('sess');
 
     const narrowed = narrowPolicy(BASE_POLICY, options.config.policy);
@@ -533,6 +541,7 @@ export class NexusRuntime implements VesperHost {
         actuatorContext: this.actuatorContext,
         platform: this.platform,
         vesperListening: this.vesper?.listening ?? false,
+        processEnumerator: this.processEnumerator,
       })),
     );
   }
@@ -699,7 +708,17 @@ export class NexusRuntime implements VesperHost {
     }
     const hint =
       this.contextHint && hintIsFresh(this.contextHint, this.clock.now()) ? this.contextHint : undefined;
-    return this.classifier.classify(signalsFromSnapshot(snapshot), hint, this.clock.now());
+
+    // Process evidence corroborates classification the same way a context hint
+    // does: it can raise a candidate's score, never invent telemetry, and an
+    // empty/failed enumeration simply leaves process.enumerate in missingSignals.
+    let processes: readonly ProcessObservation[] = [];
+    const enumerated = await this.processEnumerator.enumerate();
+    if (enumerated.ok) {
+      processes = enumerated.value.processes;
+    }
+
+    return this.classifier.classify(signalsFromSnapshot(snapshot, processes), hint, this.clock.now());
   }
 
   async currentControlValues(): Promise<Map<ControlId, ControlValue | null>> {
