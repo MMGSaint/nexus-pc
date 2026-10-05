@@ -86,3 +86,11 @@ request for them is refused with a reason rather than an "unknown capability".
 | GPU and CPU silicon tuning | Prohibited by policy — validating an overclock safely requires a stress methodology NEXUS does not own. |
 | Tray / GUI | Not built. NEXUS is a CLI and a background process. |
 | Vesper itself | Out of scope by instruction. NEXUS defines the contract; it does not implement the other side. |
+
+## Development infrastructure
+
+Software-only; no hardware required.
+
+| Item | Status |
+|---|---|
+| Continuous integration workflow | Runs the local verify gate on pushes and pull requests to main. |

@@ -92,4 +92,6 @@ unit tested but hardware dependent; see
 breakdown, and [first-pc-init.md](docs/first-pc-init.md) for what to do when
 the machine is available.
 
+Continuous integration runs the local verify gate on pushes and PRs targeting main.
+
 The next milestone is first real PC initialization.
