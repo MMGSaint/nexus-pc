@@ -73,6 +73,8 @@ import { WindowsTelemetrySource } from '../telemetry/sources/windows.js';
 import { summarize } from '../telemetry/summary.js';
 import { createProcessEnumerator } from '../process/enumerate.js';
 import type { ProcessEnumerator } from '../process/enumerate.js';
+import { annotateWithForeground, createForegroundDetector } from '../process/foreground.js';
+import type { ForegroundDetector } from '../process/foreground.js';
 import { WorkloadClassifier, signalsFromSnapshot } from '../workload/classifier.js';
 import { ensureToken } from '../vesper/auth.js';
 import type { ProfileView, RecommendationView, VesperHost } from '../vesper/handlers.js';
@@ -123,6 +125,7 @@ export class NexusRuntime implements VesperHost {
   private readonly telemetry: TelemetryPipeline;
   private readonly classifier = new WorkloadClassifier();
   private readonly processEnumerator: ProcessEnumerator;
+  private readonly foregroundDetector: ForegroundDetector;
   private readonly discovery = new HardwareDiscovery();
   private readonly eventLog: EventLog;
   private readonly sessions: SessionStore;
@@ -159,6 +162,11 @@ export class NexusRuntime implements VesperHost {
     this.runner = options.runner ?? new NodeCommandRunner();
     this.platform = options.platform ?? process.platform;
     this.processEnumerator = createProcessEnumerator({
+      platform: this.platform,
+      runner: this.runner,
+      clock: this.clock,
+    });
+    this.foregroundDetector = createForegroundDetector({
       platform: this.platform,
       runner: this.runner,
       clock: this.clock,
@@ -542,6 +550,7 @@ export class NexusRuntime implements VesperHost {
         platform: this.platform,
         vesperListening: this.vesper?.listening ?? false,
         processEnumerator: this.processEnumerator,
+        foregroundDetector: this.foregroundDetector,
       })),
     );
   }
@@ -712,10 +721,16 @@ export class NexusRuntime implements VesperHost {
     // Process evidence corroborates classification the same way a context hint
     // does: it can raise a candidate's score, never invent telemetry, and an
     // empty/failed enumeration simply leaves process.enumerate in missingSignals.
+    // Foreground annotation is best-effort and independent: failure leaves
+    // isForeground null rather than failing classification.
     let processes: readonly ProcessObservation[] = [];
     const enumerated = await this.processEnumerator.enumerate();
     if (enumerated.ok) {
       processes = enumerated.value.processes;
+      const foreground = await this.foregroundDetector.detect();
+      if (foreground.ok) {
+        processes = annotateWithForeground(processes, foreground.value.foreground);
+      }
     }
 
     return this.classifier.classify(signalsFromSnapshot(snapshot, processes), hint, this.clock.now());

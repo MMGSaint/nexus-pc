@@ -23,6 +23,7 @@ import { buildCapabilityProbes } from '../../src/capabilities/probes.js';
 import { ActuatorRegistry } from '../../src/optimizer/actuator.js';
 import { MemorySink, createLogger } from '../../src/core/logger.js';
 import { WorkloadClassifier, signalsFromSnapshot } from '../../src/workload/classifier.js';
+import { createForegroundDetector } from '../../src/process/foreground.js';
 
 const clock = new FixedClock();
 const logger = createLogger(new MemorySink(), 'debug');
@@ -206,6 +207,7 @@ describe('capability probe wiring', () => {
         platform: 'win32',
         vesperListening: false,
         processEnumerator: enumerator,
+        foregroundDetector: createForegroundDetector({ platform: 'win32', runner, clock }),
       })),
     );
     await registry.probeAll(2_000);
@@ -228,6 +230,7 @@ describe('capability probe wiring', () => {
         platform: 'win32',
         vesperListening: false,
         processEnumerator: enumerator,
+        foregroundDetector: createForegroundDetector({ platform: 'win32', runner, clock }),
       })),
     );
     await registry.probeAll(2_000);

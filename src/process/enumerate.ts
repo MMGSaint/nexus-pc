@@ -11,9 +11,10 @@
  *   - Windows: `tasklist.exe /FO CSV /NH` through the allowlisted exec
  *     boundary. No shell strings; arguments are a fixed vector.
  *
- * Foreground detection and priority control are deliberately out of scope
- * here. `isForeground` and `cpuPercent` are reported as null until those
- * capabilities exist.
+ * Foreground detection lives in `foreground.ts` and is applied by the runtime
+ * after enumeration. Priority control remains out of scope. This module reports
+ * `isForeground: null` and `cpuPercent: null` so callers never confuse "not
+ * measured here" with a real reading.
  */
 
 import { readFile, readdir } from 'node:fs/promises';

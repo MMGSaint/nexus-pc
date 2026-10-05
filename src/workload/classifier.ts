@@ -138,13 +138,43 @@ export class WorkloadClassifier {
     const names = signals.processes.map((p) => p.name.toLowerCase());
     const matched = (list: readonly string[]): string | null =>
       names.find((n) => list.some((h) => n.includes(h))) ?? null;
+    const nameMatches = (name: string, list: readonly string[]): boolean => {
+      const n = name.toLowerCase();
+      return list.some((h) => n.includes(h));
+    };
 
     const gameProcess = matched(this.hints.gaming);
     const streamProcess = matched(this.hints.streaming);
     const devProcess = matched(this.hints.development);
     const aiProcess = matched(this.hints.ai);
 
-    if (gameProcess) add('gaming', 0.45, `a known game process is running ("${gameProcess}"; name matching is a heuristic)`);
+    // Foreground is optional corroboration. null means "unknown", not "background".
+    const hasForegroundInfo = signals.processes.some((p) => p.isForeground !== null);
+
+    if (gameProcess) {
+      const gameIsForeground =
+        hasForegroundInfo &&
+        signals.processes.some((p) => p.isForeground === true && nameMatches(p.name, this.hints.gaming));
+      // A game + encoder pair is the streaming case (see below). Do not let a
+      // foreground game tip the score into plain "gaming" when an encoder is up.
+      if (streamProcess) {
+        add('gaming', 0.45, `a known game process is running ("${gameProcess}"; name matching is a heuristic)`);
+      } else if (gameIsForeground) {
+        add(
+          'gaming',
+          0.55,
+          `the foreground window belongs to a known game process ("${gameProcess}"; name matching is a heuristic)`,
+        );
+      } else if (hasForegroundInfo) {
+        add(
+          'gaming',
+          0.25,
+          `a known game process is running in the background ("${gameProcess}"; name matching is a heuristic)`,
+        );
+      } else {
+        add('gaming', 0.45, `a known game process is running ("${gameProcess}"; name matching is a heuristic)`);
+      }
+    }
     if (streamProcess) {
       add('streaming', 0.5, `a known streaming process is running ("${streamProcess}"; name matching is a heuristic)`);
       if (gameProcess) {
@@ -155,9 +185,34 @@ export class WorkloadClassifier {
       }
     }
     if (devProcess && !gameProcess) {
-      add('development', 0.45, `a development process is running ("${devProcess}"; name matching is a heuristic)`);
+      const devIsForeground =
+        hasForegroundInfo &&
+        signals.processes.some((p) => p.isForeground === true && nameMatches(p.name, this.hints.development));
+      if (devIsForeground) {
+        add(
+          'development',
+          0.55,
+          `the foreground window belongs to a development process ("${devProcess}"; name matching is a heuristic)`,
+        );
+      } else {
+        add('development', 0.45, `a development process is running ("${devProcess}"; name matching is a heuristic)`);
+      }
     }
-    if (aiProcess) add('ai_inference', 0.5, `a local AI process is running ("${aiProcess}"; name matching is a heuristic)`);
+    if (aiProcess) {
+      const aiIsForeground =
+        hasForegroundInfo &&
+        signals.processes.some((p) => p.isForeground === true && nameMatches(p.name, this.hints.ai));
+      if (aiIsForeground) {
+        add(
+          'ai_inference',
+          0.55,
+          `the foreground window belongs to a local AI process ("${aiProcess}"; name matching is a heuristic)`,
+        );
+      } else {
+        add('ai_inference', 0.5, `a local AI process is running ("${aiProcess}"; name matching is a heuristic)`);
+      }
+    }
+
 
     /* ------------------------------------------------------------ ranking */
 

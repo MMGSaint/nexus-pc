@@ -39,6 +39,7 @@ Exercised by the automated suite and verified to behave as described.
 | Process execution | Executable allowlist; no shell; dynamic values passed via environment, never interpolated into script text; NUL rejection |
 | Windows discovery parsing | `qwMemorySize` preferred over `AdapterRAM`; saturated `AdapterRAM` rejected; powercfg output parsing; DDR5 detection; EXPO-not-applied warning |
 | Process enumeration (portable) | Linux `/proc` enumerator (pid, comm, optional RSS); tasklist CSV parsing; capability probe success→available / failure→unavailable; classifier receives process evidence as optional corroboration (never overrides telemetry); capped sample ranked by working set |
+| Foreground detection (portable logic) | Win32 script parsing (`pid`/`name` JSON); annotate-by-pid without inventing rows; null≠false; classifier boosts foreground name matches and softens background-only matches; unsupported off Windows |
 
 ## IMPLEMENTED + HARDWARE DEPENDENT
 
@@ -56,6 +57,7 @@ an unavailable capability rather than an incorrect action.
 | Elevation behaviour | Which power settings actually require Administrator on this machine | Writes fail with a permission error, which is surfaced, not swallowed |
 | `install-nexus.ps1` | Task Scheduler registration on the target machine | Task is not registered; NEXUS does not start at logon |
 | `WindowsProcessEnumerator` (`tasklist`) | `tasklist.exe /FO CSV /NH` output shape and permissions on real Windows | Probe fails; `process.enumerate` stays unavailable; classification runs without process evidence and lists it in `missingSignals` |
+| `WindowsForegroundDetector` (user32 via PowerShell) | `GetForegroundWindow` / `GetWindowThreadProcessId` through the fixed script on real Windows | Probe fails; `process.foreground` unavailable/unsupported; enumerated processes keep `isForeground: null`; classifier does not treat null as background |
 
 ## MOCKED / SIMULATED
 
@@ -80,7 +82,6 @@ request for them is refused with a reason rather than an "unknown capability".
 |---|---|
 | CPU die temperature, package power, per-core clocks | No in-box Windows interface exposes these on a desktop AM5 board. They require a ring-0 helper. See the sensor bridge in [telemetry.md](telemetry.md). |
 | GPU temperature, hotspot, fan RPM, board power, GPU clocks | Requires AMD's ADLX library, which ships inside the display driver and has no command-line or WMI surface. See [dependencies.md](dependencies.md). |
-| Process foreground detection | Not implemented. Enumerated processes report `isForeground: null`; the classifier does not rely on foreground state. |
 | Process priority control | Depends on process enumeration (now available) plus a write adapter that is not implemented. Remains registered as unavailable. |
 | Fan control | Prohibited by policy — an incorrect curve is a thermal hazard NEXUS cannot recover from if it loses the interface mid-change. |
 | GPU and CPU silicon tuning | Prohibited by policy — validating an overclock safely requires a stress methodology NEXUS does not own. |

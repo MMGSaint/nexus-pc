@@ -64,6 +64,49 @@ describe('classification', () => {
     );
     expect(result.workload).toBe('streaming');
   });
+
+  it('prefers a foreground game over a background-only name match', () => {
+    const background = classifier.classify(
+      signals({
+        cpuUtilization: 40,
+        gpuUtilization: 90,
+        processes: [
+          { name: 'SquadGame.exe', pid: 1, cpuPercent: 30, workingSetBytes: null, isForeground: false },
+          { name: 'chrome.exe', pid: 2, cpuPercent: 5, workingSetBytes: null, isForeground: true },
+        ],
+      }),
+    );
+    const foreground = classifier.classify(
+      signals({
+        cpuUtilization: 40,
+        gpuUtilization: 90,
+        processes: [
+          { name: 'SquadGame.exe', pid: 1, cpuPercent: 30, workingSetBytes: null, isForeground: true },
+          { name: 'chrome.exe', pid: 2, cpuPercent: 5, workingSetBytes: null, isForeground: false },
+        ],
+      }),
+    );
+    const bgReasons = background.candidates.find((c) => c.workload === 'gaming')?.reasons.join(' ') ?? '';
+    const fgReasons = foreground.candidates.find((c) => c.workload === 'gaming')?.reasons.join(' ') ?? '';
+    expect(bgReasons).toContain('background');
+    expect(fgReasons).toContain('foreground');
+    expect(foreground.candidates.find((c) => c.workload === 'gaming')!.score).toBeGreaterThan(
+      background.candidates.find((c) => c.workload === 'gaming')!.score,
+    );
+  });
+
+  it('does not treat null isForeground as background', () => {
+    const result = classifier.classify(
+      signals({
+        cpuUtilization: 40,
+        gpuUtilization: 90,
+        processes: [{ name: 'SquadGame.exe', pid: 1, cpuPercent: 30, workingSetBytes: null, isForeground: null }],
+      }),
+    );
+    const reasons = result.candidates.find((c) => c.workload === 'gaming')?.reasons.join(' ') ?? '';
+    expect(reasons).not.toContain('background');
+    expect(reasons).not.toContain('foreground');
+  });
 });
 
 describe('uncertainty', () => {
