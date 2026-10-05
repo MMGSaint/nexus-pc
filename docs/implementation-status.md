@@ -89,8 +89,9 @@ request for them is refused with a reason rather than an "unknown capability".
 
 ## Development infrastructure
 
-Software-only; no hardware required.
+Software-only; no target-PC validation is implied.
 
 | Item | Status |
 |---|---|
-| Continuous integration workflow | Runs the local verify gate on pushes and pull requests to main. |
+| Continuous integration workflow | Runs the local verify gate on pushes and pull requests to main on both Ubuntu and Windows runners. |
+| Windows CI coverage | Exercises the Windows code paths under the real Windows runtime, but does not substitute for validation on the target PC or prove AMD-specific telemetry/sensor behaviour. |
