@@ -63,7 +63,9 @@ export type RollbackPolicy =
   /** Keep the change unless a regression was measured. The default. */
   | 'on_regression'
   /** Keep only if a benefit was measured. Used for validation runs. */
-  | 'unless_benefit';
+  | 'unless_benefit'
+  /** Temporary experiment trial: always restore the pre-trial checkpoint. */
+  | 'always';
 
 export interface EngineOptions {
   readonly clock: Clock;
@@ -92,6 +94,8 @@ export interface ExecutionEnvironment {
   /** Raises telemetry resolution for the measurement window. */
   readonly onMeasurementWindow?: (windowMs: number) => void;
   readonly rollbackPolicy?: RollbackPolicy;
+  /** Internal experiment trial marker; only NEXUS can set this. */
+  readonly transactionalExperiment?: boolean;
 }
 
 export interface ProposalContext {
@@ -223,6 +227,7 @@ export class OptimizationEngine {
         appliedAtMs: r.appliedAtMs,
       })),
       actuatorFidelity: (control) => this.options.registry.fidelityOf(control),
+      ...(environment.transactionalExperiment === undefined ? {} : { transactionalExperiment: environment.transactionalExperiment }),
     };
 
     const verdict = this.options.kernel.evaluate(proposal, safetyContext);
@@ -473,6 +478,8 @@ export class OptimizationEngine {
       rollbackReason = `A regression was measured: ${regressions.map((r) => r.message).join('; ')}.`;
     } else if (policy === 'unless_benefit' && !benefit) {
       rollbackReason = 'No measurable benefit was observed, and this run was configured to keep only measured wins.';
+    } else if (policy === 'always') {
+      rollbackReason = 'Temporary experiment trial complete; restoring the pre-trial state before the next candidate.';
     }
 
     if (rollbackReason !== null) {
