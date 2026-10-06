@@ -21,6 +21,8 @@ describe('frame performance statistics', () => {
     expect(summary.fps).toBeCloseTo(62.5, 5);
     expect(summary.fps1PercentLow).toBeCloseTo(33.3333333333, 5);
     expect(summary.frameTimeStdDevMs).toBeGreaterThan(0);
+    expect(summary.applicationFrameCount).toBe(5);
+    expect(summary.applicationFps).toBeCloseTo(62.5, 5);
   });
 
   it('computes deterministic bootstrap intervals', () => {
@@ -53,3 +55,19 @@ describe('frame performance statistics', () => {
     expect(noisy.keep).toBe(false);
   });
 });
+
+
+  it('separates generated AFMF frames from native application frames', () => {
+    const summary = summarizeFrames([
+      { frameTimeMs: 16.67, frameType: 'application', presentIntervalMs: 16.67, displayIntervalMs: 16.67 },
+      { frameTimeMs: 8.33, frameType: 'amd_afmf', presentIntervalMs: 8.33, displayIntervalMs: 8.33 },
+      { frameTimeMs: 16.67, frameType: 'application', presentIntervalMs: 8.34, displayIntervalMs: 8.34 },
+      { frameTimeMs: 8.33, frameType: 'amd_afmf', presentIntervalMs: 8.33, displayIntervalMs: 8.33 },
+    ]);
+    expect(summary.generatedFrameCount).toBe(2);
+    expect(summary.afmfFrameCount).toBe(2);
+    expect(summary.generatedFrameFraction).toBe(0.5);
+    expect(summary.applicationFrameCount).toBe(2);
+    expect(summary.applicationFps).toBeCloseTo(60, 1);
+    expect(summary.displayedFps).toBeGreaterThan(summary.applicationFps ?? 0);
+  });
