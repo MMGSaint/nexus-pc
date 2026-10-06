@@ -27,6 +27,7 @@ import type { Fidelity } from '../core/fidelity.js';
 import type { Result } from '../core/result.js';
 import { err, ok } from '../core/result.js';
 import type { ProcessObservation } from '../domain/workload.js';
+import { getForegroundProcess } from './windows-native.js';
 
 /** Soft ceiling so a pathological process table cannot flood the classifier. */
 export const DEFAULT_MAX_PROCESSES = 512;
@@ -213,7 +214,12 @@ export class WindowsProcessEnumerator implements ProcessEnumerator {
       return err(nexusError('E_UNAVAILABLE', 'tasklist produced no process rows'));
     }
 
-    const ranked = rankByWorkingSet(parsed.value);
+    const foreground = await getForegroundProcess(this.runner).catch(() => null);
+    const enriched = foreground?.ok && foreground.value.available && foreground.value.pid !== null
+      ? parsed.value.map((process) => ({ ...process, isForeground: process.pid === foreground.value.pid }))
+      : parsed.value;
+
+    const ranked = rankByWorkingSet(enriched);
     const truncated = ranked.length > max;
     const processes = truncated ? ranked.slice(0, max) : ranked;
 
