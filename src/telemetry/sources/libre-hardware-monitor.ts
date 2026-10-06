@@ -149,7 +149,8 @@ export interface LibreHardwareMonitorProbe {
 
 export class LibreHardwareMonitorSource implements TelemetrySource {
   readonly id = 'librehardwaremonitor.web';
-  readonly trust = 'live' as const;
+  /** Local HTTP/file bridges are schema-validated but not producer-authenticated. */
+  readonly trust = 'unverified' as const;
   readonly metrics = METRICS;
 
   private readonly logger: Logger;
@@ -213,7 +214,7 @@ export class LibreHardwareMonitorSource implements TelemetrySource {
         value: chosen.value,
         timestampMs,
         source: `${this.id}:${chosen.id}`,
-        fidelity: 'live',
+        fidelity: 'unverified',
         confidence: 0.9,
         note,
       });
