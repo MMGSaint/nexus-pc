@@ -30,6 +30,16 @@ function inventory(overrides: Partial<HardwareInventory['cpu']> = {}): HardwareI
     gpus: [
       {
         index: 0,
+        model: 'AMD Radeon Graphics',
+        vendor: 'AMD',
+        vramBytes: null,
+        vramSource: null,
+        driverVersion: null,
+        driverDateIso: null,
+        pnpDeviceId: null,
+      },
+      {
+        index: 1,
         model: 'AMD Radeon RX 7900 XT',
         vendor: 'AMD',
         vramBytes: 20 * 1024 ** 3,
