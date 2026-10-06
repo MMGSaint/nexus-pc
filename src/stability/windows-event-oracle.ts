@@ -6,11 +6,11 @@
  * events. A post-change delta is adverse evidence suitable for automatic rollback.
  */
 
-import type { CommandRunner } from '../../core/exec.js';
-import type { NexusError } from '../../core/errors.js';
-import { err, ok } from '../../core/result.js';
-import type { Result } from '../../core/result.js';
-import { runPowerShell, parsePowerShellJson } from '../../core/exec.js';
+import type { CommandRunner } from '../core/exec.js';
+import type { NexusError } from '../core/errors.js';
+import { err, ok } from '../core/result.js';
+import type { Result } from '../core/result.js';
+import { runPowerShell, parsePowerShellJson } from '../core/exec.js';
 
 export interface StabilitySnapshot {
   readonly capturedAtMs: number;
@@ -70,11 +70,7 @@ export async function captureWindowsStability(
   const parsed = parsePowerShellJson(result.value.stdout);
   if (!parsed.ok) return err(parsed.error);
   if (!parsed.value || typeof parsed.value !== 'object' || Array.isArray(parsed.value)) {
-    return err({
-      code: 'E_IO',
-      message: 'stability oracle returned an invalid JSON object',
-      retryable: false,
-    } as NexusError);
+    return err(nexusError('E_IO', 'stability oracle returned an invalid JSON object'));
   }
   const obj = parsed.value as Record<string, unknown>;
   const whea = nonNegative(obj.whea);
