@@ -29,6 +29,8 @@ export interface ProfileDocument {
   readonly author: ProfileAuthor;
   /** Workloads this profile is intended for. Advisory, not enforcement. */
   readonly targets: readonly WorkloadClass[];
+  /** Optional application ids that make this profile preferable when that app is detected. */
+  readonly applicationIds?: readonly string[];
   readonly settings: readonly ProfileSetting[];
   /** Capabilities that must be available for the profile to apply fully. */
   readonly requiresCapabilities: readonly CapabilityId[];
