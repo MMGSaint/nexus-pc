@@ -4,13 +4,13 @@ import { commandOk, ScriptedCommandRunner } from '../../src/core/exec.js';
 import { getForegroundProcess, getSystemCpuSets, setProcessDefaultCpuSets } from '../../src/process/windows-native.js';
 import { WindowsProcessPlacementController } from '../../src/process/placement.js';
 
-const HELPER = 'C:\\NEXUS\\native-windows-helper.exe';
+const HELPER = 'C:\\NEXUS\\nexus-native-helper.exe';
 const HELPER_SHA256 = '0'.repeat(64);
 
 describe('native Windows bridge', () => {
   it('fails closed without an explicitly configured helper path on Windows', async () => {
     const runner = new ScriptedCommandRunner();
-    const result = await getForegroundProcess(runner, { executable: HELPER, expectedSha256: HELPER_SHA256 });
+    const result = await getForegroundProcess(runner);
     if (process.platform === 'win32') {
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe('E_UNAVAILABLE');
