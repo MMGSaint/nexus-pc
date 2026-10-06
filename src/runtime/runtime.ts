@@ -74,6 +74,8 @@ import { SensorBridgeSource } from '../telemetry/sources/sensor-bridge.js';
 import { LibreHardwareMonitorSource } from '../telemetry/sources/libre-hardware-monitor.js';
 import { probeCoreinfoTopology } from '../hardware/coreinfo-topology.js';
 import { PresentMonCollector } from '../performance/presentmon.js';
+import type { FramePerformanceSummary } from '../performance/stats.js';
+
 import { captureWindowsStability, diffWindowsStability } from '../stability/windows-event-oracle.js';
 import { WindowsTelemetrySource } from '../telemetry/sources/windows.js';
 import { mergeSummaries, summarize, summarizePresentMon } from '../telemetry/summary.js';
@@ -169,7 +171,7 @@ export class NexusRuntime implements VesperHost {
     this.runner = options.runner ?? new NodeCommandRunner();
     this.platform = options.platform ?? process.platform;
     this.presentMon = new PresentMonCollector({ runner: this.runner, paths: options.paths });
-    this.powerSandbox = new WindowsPowerPlanSandbox(this.runner);
+    this.powerSandbox = new WindowsPowerPlanSandbox(this.runner, 15_000, options.paths);
     this.processEnumerator = createProcessEnumerator({
       platform: this.platform,
       runner: this.runner,
@@ -352,6 +354,21 @@ export class NexusRuntime implements VesperHost {
         this.degrade(outcome.summary);
         this.runState = 'observation_only';
       }
+      if (this.platform === 'win32') {
+        const sandbox = await this.powerSandbox.recoverOrphaned();
+        if (!sandbox.ok) {
+          this.degrade(`An orphaned power-plan experiment could not be safely recovered: ${sandbox.error.message}`);
+          this.runState = 'observation_only';
+        } else if (sandbox.value === 'restored') {
+          await this.eventLog.append({
+            kind: 'power.sandbox.restored',
+            severity: 'critical',
+            message: 'recovered an orphaned power-plan experiment after an unexpected shutdown',
+            data: { recovery: true },
+          });
+        }
+      }
+
       const restored = await this.restoreAppliedHistory();
       return restored > 0 ? `${outcome.summary} Carried ${restored} recent change(s) forward.` : outcome.summary;
     });
@@ -977,11 +994,13 @@ export class NexusRuntime implements VesperHost {
    * heuristic: process enumeration corroborates the workload, while the
    * resulting PID is only used to collect frame evidence for this experiment.
    */
-  private async resolveFrameTarget(): Promise<{ processId: number; processName: string } | null> {
+  private async resolveFrameTarget(applicationId?: string): Promise<{ processId: number; processName: string } | null> {
     const enumerated = await this.processEnumerator.enumerate({ maxProcesses: 256 });
     if (!enumerated.ok) return null;
 
-    const names = Object.values(APPLICATION_HINTS).flat();
+    const names = applicationId && APPLICATION_HINTS[applicationId]
+      ? APPLICATION_HINTS[applicationId]
+      : Object.values(APPLICATION_HINTS).flat();
     const foreground = this.platform === 'win32'
       ? await getForegroundProcess(this.runner).catch(() => null)
       : null;
@@ -1000,6 +1019,91 @@ export class NexusRuntime implements VesperHost {
     const match = matches[0];
     if (!match?.pid || match.pid <= 0) return null;
     return { processId: match.pid, processName: match.name };
+  }
+
+  async getPerformanceEvidence(
+    windowMs: number,
+    applicationId?: string,
+  ): Promise<{
+    readonly capturedAtMs: number;
+    readonly telemetry: TelemetrySummary;
+    readonly frame: FramePerformanceSummary | null;
+    readonly frameTarget: { readonly processId: number; readonly processName: string } | null;
+    readonly topologyAware: boolean;
+    readonly fidelity: Fidelity;
+  }> {
+    const boundedMs = Math.max(1_000, Math.min(120_000, Math.round(windowMs)));
+    const telemetry = summarize(this.telemetry.history(boundedMs));
+    const frameTarget = this.platform === 'win32' ? await this.resolveFrameTarget(applicationId) : null;
+    let frame: FramePerformanceSummary | null = null;
+
+    if (frameTarget && this.platform === 'win32') {
+      const seconds = Math.max(1, Math.min(10, Math.ceil(boundedMs / 1000)));
+      const captured = await this.presentMon.capture({
+        processId: frameTarget.processId,
+        seconds,
+      });
+      if (captured.ok) frame = captured.value.summary;
+    }
+
+    return {
+      capturedAtMs: this.clock.now(),
+      telemetry,
+      frame,
+      frameTarget,
+      topologyAware: this.platform === 'win32' && this.capabilities.get('cpu.topology')?.state === 'available',
+      fidelity: frame && telemetry.fidelity === 'live' ? 'live' : telemetry.fidelity,
+    };
+  }
+
+  async getDecisionEvidence(outcomeId: string): Promise<unknown> {
+    const outcome = this.outcomes.get(outcomeId);
+    if (!outcome) return null;
+
+    return {
+      outcomeId,
+      status: outcome.status,
+      workload: outcome.workload,
+      fidelity: outcome.fidelity,
+      summary: outcome.summary,
+      proposal: outcome.proposalId,
+      findings: outcome.findings,
+      measurements: outcome.measurements,
+      checkpointId: outcome.checkpointId,
+      rolledBack: outcome.rolledBack,
+      safetyDecision: outcome.verdict
+        ? {
+            decision: outcome.verdict.decision,
+            findings: outcome.verdict.findings,
+            policyDigest: outcome.verdict.policyDigest,
+          }
+        : null,
+      stabilityGuard: this.degradedReasons.filter((reason) => /stability|WHEA|TDR/i.test(reason)),
+    };
+  }
+
+  async getTopology(): Promise<unknown> {
+    if (this.platform !== 'win32') {
+      return { available: false, platform: this.platform, detail: 'Windows topology evidence is not currently available on this platform.' };
+    }
+    const native = await import('../process/windows-native.js').then((module) => module.getSystemCpuSets(this.runner));
+    if (!native.ok) {
+      return { available: false, platform: this.platform, detail: native.error.message, fidelity: 'unavailable' };
+    }
+    const groups = new Map<number, number>();
+    for (const cpuSet of native.value) {
+      groups.set(cpuSet.lastLevelCacheIndex, (groups.get(cpuSet.lastLevelCacheIndex) ?? 0) + 1);
+    }
+    return {
+      available: native.value.length > 0,
+      fidelity: 'live',
+      cpuSetCount: native.value.length,
+      cacheDomains: [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([cacheDomain, logicalProcessors]) => ({
+        cacheDomain,
+        logicalProcessors,
+      })),
+      cpuSets: native.value,
+    };
   }
 
   async runOptimization(request: {

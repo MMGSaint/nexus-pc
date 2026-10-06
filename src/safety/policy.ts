@@ -86,6 +86,19 @@ const DEFAULT_CONTROL_POLICY: Omit<ControlPolicy, 'control'> = {
  */
 const BASE_CONTROL_POLICIES: readonly ControlPolicy[] = [
   {
+    control: 'power.processor.epp',
+    allowed: true,
+    // Keep the private tuner inside a conservative EPP envelope. The target-specific
+    // experiment layer can choose among values in this range, but the kernel remains the
+    // final authority and can only narrow this further through configuration.
+    range: { min: 20, max: 100 },
+    requiresLiveTelemetry: true,
+    requiresBaseline: true,
+    requiresConfirmation: false,
+    thermal: { maxCpuTemperatureC: 85 },
+    cooldownMs: 120_000,
+  },
+  {
     control: 'power.scheme.active',
     allowed: true,
     requiresLiveTelemetry: false,
