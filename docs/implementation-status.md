@@ -63,7 +63,7 @@ Deliberately synthetic. Everything derived from these is labelled `mocked` and
 can never be reported as `live`.
 
 - `MockHardwareProvider` and the `target-desktop` / `minimal-unknown` fixtures.
-  The target fixture models a Ryzen 9 9950X, RX 7900 XT with 20 GB, and 96 GB
+  The target fixture models a Ryzen 9 9950X3D, RX 7900 XT with 20 GB, and 96 GB
   of DDR5. It is a *model of* that machine, not a reading of it.
 - `MockTelemetrySource` — deterministic simulated readings.
 - `MockControlAdapter` — in-memory controls used for simulation and tests.
@@ -95,3 +95,7 @@ Software-only; no target-PC validation is implied.
 |---|---|
 | Continuous integration workflow | Runs the local verify gate on pushes and pull requests to main on both Ubuntu and Windows runners. |
 | Windows CI coverage | Exercises the Windows code paths under the real Windows runtime, but does not substitute for validation on the target PC or prove AMD-specific telemetry/sensor behaviour. |
+
+## Private primary-target specialization
+
+The private development target is Ryzen 9 9950X3D + Radeon RX 7900 XT 20 GB + 96 GB DDR5. The specialization layer recognizes this target and prevents automatic generic profiles from changing whole-package core parking or the processor minimum state until the X3D-specific measurement stack is present. This is a strategy guard, not a replacement for the deterministic safety kernel.
