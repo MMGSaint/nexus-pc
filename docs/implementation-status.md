@@ -106,6 +106,10 @@ Software-only; no target-PC validation is implied.
 | Continuous integration workflow | Runs the local verify gate on pushes and pull requests to main on both Ubuntu and Windows runners. |
 | Windows CI coverage | Exercises the Windows code paths under the real Windows runtime, but does not substitute for validation on the target PC or prove AMD-specific telemetry/sensor behaviour. |
 
+## Mature-stack notes
+
+The merged hardening follows the same useful separation seen in mature desktop tooling: process/library orchestration stays distinct from hardware backends, frame timing is collected by a dedicated truth source instead of reconstructed in-process, and user-facing profile selection remains separate from machine-control authority. Playnite, FanControl, MangoHud and Special K were used as architectural references only; no third-party source was vendored from them.
+
 ## Private primary-target specialization
 
 The private development target is Ryzen 9 9950X3D + Radeon RX 7900 XT 20 GB + 96 GB DDR5. The specialization layer recognizes this target and prevents automatic generic profiles from changing whole-package core parking or the processor minimum state until the X3D-specific measurement stack is present. This is a strategy guard, not a replacement for the deterministic safety kernel.
