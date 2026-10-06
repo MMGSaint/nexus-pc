@@ -417,7 +417,7 @@ export class SafetyKernel {
     if (transactional && !TRANSACTIONAL_EXPERIMENT_CONTROLS.has(control)) {
       block(
         'EXPERIMENT_CONTROL_NOT_ALLOWED',
-        `\"${descriptor.name}\" is not an approved temporary experiment control.`,
+        `"${descriptor.name}" is not an approved temporary experiment control.`,
       );
     }
 
