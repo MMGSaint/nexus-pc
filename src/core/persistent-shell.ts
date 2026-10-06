@@ -22,14 +22,14 @@
  * in an unbounded loop.
  */
 
-import { spawnNexusChild, type ChildProcessWithoutNullStreams } from './exec.js';
+import { isAllowedExecutable, resolveTrustedSystemExecutable, spawnNexusChild } from './exec.js';
+type ChildProcessWithoutNullStreams = ReturnType<typeof spawnNexusChild>;
 import type { Clock } from './clock.js';
 import type { NexusError } from './errors.js';
 import { nexusError, toNexusError } from './errors.js';
 import type { Logger } from './logger.js';
 import type { Result } from './result.js';
 import { err, ok } from './result.js';
-import { isAllowedExecutable, resolveTrustedSystemExecutable } from './exec.js';
 
 export const READY_MARKER = 'NEXUSREADY';
 export const JSON_PREFIX = 'NEXUSJSON ';
@@ -153,7 +153,7 @@ export class PersistentShell {
       // asynchronously, and by then a replacement may already be starting —
       // tearing that one down would orphan the process and reattach the old
       // stream's state to the new child's startup.
-      child.on('error', (e) => {
+      child.on('error', (e: unknown) => {
         if (this.child === child) this.onExit(toNexusError(e, 'E_UNAVAILABLE'));
       });
       child.on('close', () => {

@@ -195,11 +195,12 @@ export class NexusRuntime implements VesperHost {
     });
     this.powerSandbox = new WindowsPowerPlanSandbox(this.runner, 15_000, options.paths);
     this.experimentStore = new ExperimentStore(options.paths, this.clock, this.logger);
+    const helperOptions = nativeHelperOptions(options.config);
     this.processEnumerator = createProcessEnumerator({
       platform: this.platform,
       runner: this.runner,
       clock: this.clock,
-      nativeHelperOptions: nativeHelperOptions(options.config),
+      ...(helperOptions === undefined ? {} : { nativeHelperOptions: helperOptions }),
     });
     this.sessionId = this.ids.next('sess');
 
