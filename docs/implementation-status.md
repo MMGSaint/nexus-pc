@@ -55,7 +55,7 @@ an unavailable capability rather than an incorrect action.
 | `WindowsPowerSchemeAdapter` | `powercfg /getactivescheme` and `/setactive` | The capability probe fails; the control is unavailable |
 | `WindowsPowerSettingAdapter` | The subgroup and setting GUIDs, and `/setacvalueindex` behaviour | Probe fails; those controls are unavailable |
 | Elevation behaviour | Which power settings actually require Administrator on this machine | Writes fail with a permission error, which is surfaced, not swallowed |
-| `install-nexus.ps1` | Task Scheduler registration on the target machine | Task is not registered; NEXUS does not start at logon |
+| `install-nexus.ps1` | Task Scheduler registration on the target machine | Task is not registered; NEXUS does not start at logon; the script is intentionally per-user and does not require the NEXUS runtime to be online. |
 | `WindowsProcessEnumerator` (`tasklist`) | `tasklist.exe /FO CSV /NH` output shape and foreground-window access on real Windows | Probe fails; `process.enumerate` stays unavailable; classification runs without process evidence and lists it in `missingSignals` |
 
 ### IMPLEMENTED + HARDWARE DEPENDENT
