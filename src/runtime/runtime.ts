@@ -1364,6 +1364,14 @@ export class NexusRuntime implements VesperHost {
     rollbackPolicy?: ExecutionEnvironment['rollbackPolicy'];
     /** Experimental: run power-setting experiments on a duplicated plan. */
     sandboxPowerPlan?: boolean;
+    /** Internal-only bounded tuner candidate. */
+    experimentCandidate?: Readonly<Record<ControlId, ControlValue>>;
+    /** Internal-only temporary trial marker. */
+    transactionalExperiment?: boolean;
+    /** Optional target application for PresentMon evidence. */
+    applicationId?: string;
+    /** Human-readable name for a kept sandbox plan. */
+    sandboxPowerPlanName?: string;
   }): Promise<OptimizationOutcome> {
     const workload = await this.analyzeWorkload();
 
@@ -1401,50 +1409,112 @@ export class NexusRuntime implements VesperHost {
       );
     }
 
-    const chosen = request.profileId
-      ? this.profiles.get(request.profileId)
-      : this.profiles.suggestFor(workload.workload, workload.detectedApplicationIds ?? []);
-    if (!chosen) {
+    if (request.transactionalExperiment && !request.sandboxPowerPlan) {
       return this.engine.noAction(
-        'no_proposal_generated',
-        request.profileId
-          ? `There is no profile named "${request.profileId}".`
-          : `No profile targets a ${workload.workload} workload.`,
+        'unsafe',
+        'Temporary tuner trials must run inside an isolated duplicated power plan.',
         workload,
       );
     }
 
-    if (request.profileId === undefined) {
-      const guard = automaticProfileGuard(chosen.profile, specializeTarget(this.inventory));
-      if (guard !== null) {
-        return this.engine.noAction('no_proposal_generated', guard, workload);
-      }
+    if (request.experimentCandidate && request.profileId !== undefined) {
+      return this.engine.noAction(
+        'no_proposal_generated',
+        'A tuner candidate cannot be combined with a named profile.',
+        workload,
+      );
     }
+
+    const chosen = request.experimentCandidate
+      ? undefined
+      : request.profileId
+        ? this.profiles.get(request.profileId)
+        : this.profiles.suggestFor(workload.workload, workload.detectedApplicationIds ?? []);
 
     const current = await this.currentControlValues();
-    const proposed = this.engine.propose({
-      workload,
-      profile: chosen.profile,
-      currentValues: current,
-      origin: request.origin,
-      requestedBy: request.requestedBy,
-    });
+    let proposal: OptimizationProposal;
 
-    if (proposed.kind === 'no_action') {
-      return this.engine.noAction(proposed.reason, proposed.summary, workload);
+    if (request.experimentCandidate) {
+      const entries = Object.entries(request.experimentCandidate);
+      if (entries.length === 0) {
+        return this.engine.noAction('no_proposal_generated', 'The tuner candidate contained no controls.', workload);
+      }
+
+      const allowed = new Set(['power.processor.epp', 'power.processor.boost_mode']);
+      const invalid = entries.filter(([control]) => !allowed.has(control));
+      if (invalid.length > 0) {
+        return this.engine.noAction(
+          'unsafe',
+          'The tuner can only exercise power.processor.epp and power.processor.boost_mode.',
+          workload,
+        );
+      }
+
+      const changes = entries
+        .filter(([control, value]) => !structurallyEqual(current.get(control) ?? null, value))
+        .map(([control, targetValue]) => ({
+          control,
+          targetValue,
+          rationale: 'Bounded private per-game tuner candidate.',
+          expectedEffect: 'Measure frame-time and system evidence under this temporary power policy.',
+        }));
+
+      if (changes.length === 0) {
+        return this.engine.noAction('already_optimal', 'This tuner candidate already matches the current control state.', workload);
+      }
+
+      proposal = {
+        id: this.ids.next('prop'),
+        createdAtMs: this.clock.now(),
+        origin: request.origin,
+        requestedBy: request.requestedBy,
+        workload: workload.workload,
+        changes,
+        profileId: 'experiment',
+        notes: 'private tuner candidate; temporary trials restore their checkpoint',
+      };
+    } else {
+      if (!chosen) {
+        return this.engine.noAction(
+          'no_proposal_generated',
+          request.profileId
+            ? `There is no profile named "${request.profileId}".`
+            : `No profile targets a ${workload.workload} workload.`,
+          workload,
+        );
+      }
+
+      if (request.profileId === undefined) {
+        const guard = automaticProfileGuard(chosen.profile, specializeTarget(this.inventory));
+        if (guard !== null) {
+          return this.engine.noAction('no_proposal_generated', guard, workload);
+        }
+      }
+
+      const proposed = this.engine.propose({
+        workload,
+        profile: chosen.profile,
+        currentValues: current,
+        origin: request.origin,
+        requestedBy: request.requestedBy,
+      });
+
+      if (proposed.kind === 'no_action') {
+        return this.engine.noAction(proposed.reason, proposed.summary, workload);
+      }
+
+      proposal =
+        request.confirmControls && request.origin === 'user'
+          ? {
+              ...proposed.proposal,
+              confirmation: {
+                confirmedAtMs: this.clock.now(),
+                controls: request.confirmControls,
+                acknowledgement: 'confirmed at the NEXUS command line',
+              },
+            }
+          : proposed.proposal;
     }
-
-    const proposal =
-      request.confirmControls && request.origin === 'user'
-        ? {
-            ...proposed.proposal,
-            confirmation: {
-              confirmedAtMs: this.clock.now(),
-              controls: request.confirmControls,
-              acknowledgement: 'confirmed at the NEXUS command line',
-            },
-          }
-        : proposed.proposal;
 
     if (request.dryRun) {
       const verdict = this.kernel.evaluate(proposal, {
