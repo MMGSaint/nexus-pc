@@ -165,7 +165,7 @@ export async function setProcessDefaultCpuSets(
   options?: NativeWindowsHelperOptions,
 ): Promise<Result<DefaultCpuSets, NexusError>> {
   if (!Number.isSafeInteger(pid) || pid <= 0) return err(nexusError('E_INVALID_INPUT', 'pid must be a positive integer'));
-  if (ids.length > 256 || ids.some((id) => !Number.isSafeInteger(id) || id <= 0)) {
+  if (ids.length > 256 || ids.some((id) => !Number.isSafeInteger(id) || id < 0)) {
     return err(nexusError('E_INVALID_INPUT', 'CPU Set IDs must be positive integers and the list may contain at most 256 IDs'));
   }
   const unique = [...new Set(ids)].sort((a,b)=>a-b);
@@ -190,7 +190,7 @@ export function groupCpuSetsByCache(sets: readonly NativeCpuSet[]): Map<number, 
   return groups;
 }
 
-/** Never use allocated or parked CPU Sets as a candidate without explicit policy. */
+/** Never use allocated, parked, or real-time CPU Sets as ordinary application targets without explicit policy. */
 export function safeCpuSets(sets: readonly NativeCpuSet[]): NativeCpuSet[] {
-  return sets.filter((set) => !set.allocated && !set.parked);
+  return sets.filter((set) => !set.allocated && !set.parked && !set.realTime);
 }
