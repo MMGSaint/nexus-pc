@@ -65,6 +65,7 @@ export interface VesperHost {
   rollback(checkpointId: string): Promise<RestoreResult>;
   getOptimizationResult(outcomeId: string): Promise<OptimizationOutcome | null>;
   getDecisionEvidence?(outcomeId: string): Promise<unknown | null>;
+  runExperiment?(params: { readonly applicationId: string; readonly repetitions?: number; readonly maxCandidates?: number; readonly practicalThresholdPercent?: number }): Promise<unknown>;
   getTopology?(): Promise<unknown | null>;
   /** Identifier recorded on Vesper-origin requests, for audit. */
   readonly requesterId: string;
@@ -169,6 +170,23 @@ export async function dispatch(
       // The outcome's own fidelity is authoritative. An outcome produced by a
       // mock actuator arrives here as `mocked` and leaves as `mocked`.
       return okResult(outcome.fidelity, outcome);
+    }
+
+    case 'runExperiment': {
+      if (!host.runExperiment) return errResult(nexusError('E_UNAVAILABLE', 'per-game experiments are not implemented by this host'));
+      if (!params?.applicationId) return errResult(nexusError('E_INVALID_INPUT', 'runExperiment requires an applicationId'));
+      const result = await host.runExperiment({
+        applicationId: params.applicationId,
+        ...(params.repetitions === undefined ? {} : { repetitions: params.repetitions }),
+        ...(params.maxCandidates === undefined ? {} : { maxCandidates: params.maxCandidates }),
+        ...(params.practicalThresholdPercent === undefined ? {} : { practicalThresholdPercent: params.practicalThresholdPercent }),
+      });
+      const fidelity =
+        typeof result === 'object' && result !== null && !Array.isArray(result) &&
+        (result as Record<string, unknown>).fingerprint !== null
+          ? 'live'
+          : 'unverified';
+      return okResult(fidelity, result);
     }
 
     case 'rollback': {
