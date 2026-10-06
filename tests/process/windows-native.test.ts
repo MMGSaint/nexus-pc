@@ -49,18 +49,25 @@ describe('WindowsProcessPlacementController', () => {
     let calls = 0;
     const runner = new ScriptedCommandRunner([
       {
-        match: r => r.file === 'nexus-native-helper.exe',
-        result: commandOk(
-          ++calls === 1
-            ? JSON.stringify({ ok: true, result: { pid: 99, ids: [], explicitlyAssigned: false } })
-            : JSON.stringify({
-                ok: true,
-                result: [
-                  { id: 10, group: 0, logicalProcessorIndex: 0, coreIndex: 0, lastLevelCacheIndex: 7, numaNodeIndex: 0, efficiencyClass: 0, parked: false, allocated: false, allocatedToTargetProcess: false, realTime: false },
-                  { id: 11, group: 0, logicalProcessorIndex: 1, coreIndex: 0, lastLevelCacheIndex: 7, numaNodeIndex: 0, efficiencyClass: 0, parked: false, allocated: false, allocatedToTargetProcess: false, realTime: false },
-                ],
-              }),
-        ),
+        match: r =>
+          r.file === 'nexus-native-helper.exe' &&
+          r.stdin?.includes('"command":"get-default-cpu-sets"'),
+        result: commandOk(JSON.stringify({
+          ok: true,
+          result: { pid: 99, ids: [], explicitlyAssigned: false },
+        })),
+      },
+      {
+        match: r =>
+          r.file === 'nexus-native-helper.exe' &&
+          r.stdin?.includes('"command":"topology"'),
+        result: commandOk(JSON.stringify({
+          ok: true,
+          result: [
+            { id: 10, group: 0, logicalProcessorIndex: 0, coreIndex: 0, lastLevelCacheIndex: 7, numaNodeIndex: 0, efficiencyClass: 0, parked: false, allocated: false, allocatedToTargetProcess: false, realTime: false },
+            { id: 11, group: 0, logicalProcessorIndex: 1, coreIndex: 0, lastLevelCacheIndex: 7, numaNodeIndex: 0, efficiencyClass: 0, parked: false, allocated: false, allocatedToTargetProcess: false, realTime: false },
+          ],
+        })),
       },
     ]);
     const result = await new WindowsProcessPlacementController(runner).planForCacheDomain(99, 7);
