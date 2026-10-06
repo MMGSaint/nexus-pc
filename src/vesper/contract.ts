@@ -46,6 +46,7 @@ export const VESPER_METHODS = {
   getStatus: 'status',
   getCapabilities: 'capabilities',
   getTelemetrySummary: 'telemetry',
+  getPerformanceEvidence: 'telemetry',
   getCurrentProfile: 'status',
   listProfiles: 'status',
   analyzeWorkload: 'workload',
@@ -54,6 +55,8 @@ export const VESPER_METHODS = {
   optimize: 'optimize',
   rollback: 'rollback',
   getOptimizationResult: 'status',
+  getDecisionEvidence: 'status',
+  getTopology: 'capabilities',
 } as const;
 
 export type VesperMethod = keyof typeof VESPER_METHODS;
@@ -91,6 +94,7 @@ export const requestSchema = vObject({
         profileId: vOptional(vString({ maxLength: 64 })),
         checkpointId: vOptional(vString({ maxLength: 64 })),
         outcomeId: vOptional(vString({ maxLength: 64 })),
+        applicationId: vOptional(vString({ maxLength: 128 })),
         workload: vOptional(vEnum(WORKLOAD_CLASSES)),
         note: vOptional(vString({ maxLength: 512 })),
         ttlMs: vOptional(vNumber({ integer: true, min: 1_000, max: 3_600_000 })),
@@ -125,6 +129,7 @@ export interface VesperParams {
   readonly profileId?: string | undefined;
   readonly checkpointId?: string | undefined;
   readonly outcomeId?: string | undefined;
+  readonly applicationId?: string | undefined;
   readonly workload?: (typeof WORKLOAD_CLASSES)[number] | undefined;
   readonly note?: string | undefined;
   readonly ttlMs?: number | undefined;
