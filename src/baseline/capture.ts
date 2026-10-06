@@ -53,6 +53,8 @@ export interface Baseline {
   readonly controlStates: readonly ControlState[];
   readonly telemetry: TelemetrySummary;
   readonly workload: WorkloadClassification | null;
+  /** Signed display driver identity captured with the baseline, when available. */
+  readonly driverVersion?: string | null;
   /** Fraction of writable controls whose value was successfully read, 0..1. */
   readonly controlCoverage: number;
   readonly notes: readonly string[];
@@ -89,6 +91,7 @@ const baselineSchema = vObject({
   ),
   telemetry: vUnknown(),
   workload: vUnknown(),
+  driverVersion: vOptional(vNullable(vString({ maxLength: 64 }))),
   controlCoverage: vNumber({ min: 0, max: 1 }),
   notes: vArray(vString({ maxLength: 512 }), { maxItems: 64 }),
 });
@@ -98,6 +101,7 @@ export interface BaselineCaptureInput {
   readonly capabilities: ReadonlyMap<CapabilityId, CapabilityRecord>;
   readonly snapshots: readonly TelemetrySnapshot[];
   readonly workload: WorkloadClassification | null;
+  readonly driverVersion?: string | null;
   readonly context: ActuatorContext;
   readonly notes?: readonly string[];
 }
@@ -195,6 +199,7 @@ export class BaselineStore {
       controlStates,
       telemetry,
       workload: input.workload,
+      ...(input.driverVersion === undefined ? {} : { driverVersion: input.driverVersion }),
       controlCoverage: candidates.length === 0 ? 0 : readable / candidates.length,
       notes,
     };
