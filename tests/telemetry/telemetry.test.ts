@@ -417,7 +417,7 @@ describe('SensorBridgeSource', () => {
       const readings = await source.sample({ clock: new FixedClock(T0 + 1000), logger, timeoutMs: 1000 });
       const cpu = readings.find((r) => r.metric === 'cpu.temperature');
       expect(cpu?.value).toBe(62);
-      expect(cpu?.fidelity).toBe('live');
+      expect(cpu?.fidelity).toBe('unverified');
       expect(source.producer).toBe('test-helper');
       expect(readings.find((r) => r.metric === 'gpu.power')?.value).toBeNull();
     });

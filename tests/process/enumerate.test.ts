@@ -26,6 +26,7 @@ import { WorkloadClassifier, signalsFromSnapshot } from '../../src/workload/clas
 
 const clock = new FixedClock();
 const logger = createLogger(new MemorySink(), 'debug');
+const NATIVE_HELPER = { executable: 'C:\\NEXUS\\nexus-native-helper.exe', expectedSha256: '0'.repeat(64) } as const;
 
 describe('parseTasklistCsv', () => {
   it('parses quoted tasklist rows including thousands separators in mem usage', () => {
@@ -107,7 +108,7 @@ describe('WindowsProcessEnumerator', () => {
         })),
       },
     ]);
-    const result = await new WindowsProcessEnumerator(runner, clock).enumerate();
+    const result = await new WindowsProcessEnumerator(runner, clock, NATIVE_HELPER).enumerate();
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.processes.find((p) => p.pid === 4242)?.isForeground).toBe(true);
