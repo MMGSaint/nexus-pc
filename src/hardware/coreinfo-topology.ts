@@ -52,6 +52,16 @@ export function parseCoreinfoCacheOutput(stdout: string): X3dTopology {
   let logicalProcessorCount = 0;
   for (const raw of stdout.split(/\r?\n/)) {
     const line = raw.replace(/\r/g, '');
+
+    // Coreinfo prints the total logical-processor bitmap immediately above the
+    // per-cache entries. Cache rows may use a shorter bitmap, so do not infer
+    // the machine-wide logical-processor count from those rows alone.
+    const mapHeader = /^(?<mask>[*-]+)\s+Logical Processor to Cache Map:\s*$/i.exec(line);
+    if (mapHeader?.groups?.mask) {
+      logicalProcessorCount = Math.max(logicalProcessorCount, mapHeader.groups.mask.length);
+      continue;
+    }
+
     const cache = /^(?<mask>[*-]+)\s+(?<kind>.+?Cache)\s+\d+,\s+Level\s+(?<level>\d+),\s+(?<size>[^,]+),/i.exec(line);
     if (!cache?.groups?.mask || !cache.groups.level || !cache.groups.size || !cache.groups.kind) continue;
     const maskText = cache.groups.mask;
