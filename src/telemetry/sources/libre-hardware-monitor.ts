@@ -55,23 +55,45 @@ function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function parseLocalizedNumber(raw: string): number | null {
+  let value = raw.trim().replace(/\s+/g, '');
+  if (!value) return null;
+  const sign = value.startsWith('-') || value.startsWith('+') ? value.slice(0, 1) : '';
+  value = sign ? value.slice(1) : value;
+  const lastComma = value.lastIndexOf(',');
+  const lastDot = value.lastIndexOf('.');
+  if (lastComma >= 0 && lastDot >= 0) {
+    // The last punctuation mark is the decimal separator; the other is a
+    // thousands separator. Example: 1,234.5 or 1.234,5.
+    const decimal = lastComma > lastDot ? ',' : '.';
+    const thousands = decimal === ',' ? /\./g : /,/g;
+    value = value.replace(thousands, '').replace(decimal, '.');
+  } else if (lastComma >= 0) {
+    const trailing = value.length - lastComma - 1;
+    value = trailing === 3 && lastComma > 0 ? value.replace(/,/g, '') : value.replace(',', '.');
+  } else {
+    value = value.replace(/,/g, '');
+  }
+  const parsed = Number(sign + value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function finiteNumber(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value !== 'string') return null;
-  const match = value.replace(/,/g, '.').match(/[-+]?\d+(?:\.\d+)?/);
+  const match = value.match(/[-+]?\d[\d\s,.]*/);
   if (!match?.[0]) return null;
-  const parsed = Number(match[0]);
-  return Number.isFinite(parsed) ? parsed : null;
+  return parseLocalizedNumber(match[0]);
 }
 
 function finiteBytes(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value !== 'string') return null;
-  const normalized = value.replace(/,/g, '.').trim().toUpperCase();
-  const match = normalized.match(/([-+]?\d+(?:\.\d+)?)\s*(B|KB|KIB|MB|MIB|GB|GIB|TB|TIB)?/);
+  const normalized = value.trim().toUpperCase();
+  const match = normalized.match(/([-+]?\d[\d\s,.]*)\s*(B|KB|KIB|MB|MIB|GB|GIB|TB|TIB)?/);
   if (!match?.[1]) return null;
-  const n = Number(match[1]);
-  if (!Number.isFinite(n)) return null;
+  const n = parseLocalizedNumber(match[1]);
+  if (n === null) return null;
   const unit = match[2] ?? 'B';
   const factor = unit === 'TB' || unit === 'TIB' ? 1024 ** 4
     : unit === 'GB' || unit === 'GIB' ? 1024 ** 3
