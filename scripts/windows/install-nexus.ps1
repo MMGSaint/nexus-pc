@@ -36,6 +36,11 @@
     Delay after logon before NEXUS starts. Defaults to 30 seconds so NEXUS does
     not compete with everything else starting at logon.
 
+.PARAMETER InstallRoot
+    Runtime installation directory. Non-elevated installs default to the checkout.
+    Elevated installs default to %ProgramFiles%\NEXUS and refuse to run elevated from
+    a user-writable checkout.
+
 .EXAMPLE
     .\install-nexus.ps1
     Registers NEXUS at normal privilege for the current user.
