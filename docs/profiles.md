@@ -1,4 +1,4 @@
-# Profiles
+| `gaming` | gaming, GPU-bound | floor 20%, ceiling 100%, all cores unparked, aggressive boost (generic baseline; private X3D target does not auto-select this while CCD validation is absent) |# Profiles
 
 A profile is a **complete, explicit** list of the controls it changes. There is
 no "and some tuning" clause: if a setting is not in `settings`, applying the
@@ -119,3 +119,7 @@ on *this* machine right now?" — splitting settings into supported and
 unsupported based on live capability state. That filtering happens above the
 safety kernel, before a proposal exists, which is why the kernel itself can
 stay strictly all-or-nothing.
+
+## Private X3D specialization
+
+The private primary target is a Ryzen 9 9950X3D. Because that processor has a cache-sensitive gaming topology, NEXUS does not automatically select a profile that changes whole-package core parking or the processor floor on that target until the native topology probe, live sensor bridge, frame-time measurement, stability oracle, and CCD-aware scheduling work are validated. This prevents a generic recipe from becoming the target's permanent truth.
