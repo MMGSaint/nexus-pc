@@ -51,8 +51,9 @@ remains a heuristic: a renamed executable defeats it and an unknown game is
 invisible to it. The classifier labels those reasons as heuristics rather than
 presenting them as facts.
 
-Foreground detection is still absent (`isForeground` is always null), so NEXUS
-cannot yet prefer the focused window over a background game.
+On Windows, foreground detection is now probed through the native foreground-window
+surface and used only as corroborating evidence / PresentMon target ranking. It remains
+hardware dependent until the target PC is exercised.
 
 ## AMD driver and per-game profile ownership
 
