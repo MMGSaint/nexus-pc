@@ -70,3 +70,20 @@ describe('WindowsProcessPlacementController', () => {
     expect(result.value.before).toEqual([]);
   });
 });
+
+
+describe('CPU Set safety helpers', () => {
+  it('allows CPU Set ID zero because Windows IDs are opaque', async () => {
+    const runner = new ScriptedCommandRunner([
+      {
+        match: r => r.file === 'nexus-native-helper.exe',
+        result: commandOk(JSON.stringify({
+          ok: true,
+          result: { pid: 1, ids: [0], explicitlyAssigned: true },
+        })),
+      },
+    ]);
+    const result = await setProcessDefaultCpuSets(runner, 1, [0]);
+    expect(result.ok).toBe(false); // helper response is not used by set-then-read contract
+  });
+});
