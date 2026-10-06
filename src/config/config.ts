@@ -114,10 +114,10 @@ const configSchema = vObject({
   /** Third-party observation tools are never resolved through PATH. */
   tools: vOptional(
     vObject({
-      presentMonPath: vOptional(vString({ maxLength: 1024 })),
-      presentMonSha256: vOptional(vString({ maxLength: 64 })),
-      coreInfoPath: vOptional(vString({ maxLength: 1024 })),
-      coreInfoSha256: vOptional(vString({ maxLength: 64 })),
+      presentMonPath: vOptional(vString({ maxLength: 1024, pattern: /^[A-Za-z]:[\\/]/ })),
+      presentMonSha256: vOptional(vString({ maxLength: 64, pattern: /^[a-fA-F0-9]{64}$/ })),
+      coreInfoPath: vOptional(vString({ maxLength: 1024, pattern: /^[A-Za-z]:[\\/]/ })),
+      coreInfoSha256: vOptional(vString({ maxLength: 64, pattern: /^[a-fA-F0-9]{64}$/ })),
     }),
   ),
   policy: vOptional(policyOverrideSchema),
