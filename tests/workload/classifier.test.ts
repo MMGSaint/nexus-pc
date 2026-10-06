@@ -38,6 +38,18 @@ describe('classification', () => {
     expect(result.workload).toBe('cpu_bound');
   });
 
+  it('recognises the Wardogs client as a gaming workload', () => {
+    const result = classifier.classify(
+      signals({
+        cpuUtilization: 35,
+        gpuUtilization: 45,
+        processes: [{ name: 'WardogsClient-Win64-Shipping.exe', pid: 1, cpuPercent: 30, workingSetBytes: null, isForeground: true }],
+      }),
+    );
+    expect(result.workload).toBe('gaming');
+    expect(result.confidence).toBeGreaterThanOrEqual(MIN_ACTIONABLE_CONFIDENCE);
+  });
+
   it('uses a process name as a heuristic and says so', () => {
     const result = classifier.classify(
       signals({
