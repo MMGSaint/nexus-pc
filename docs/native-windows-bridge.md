@@ -22,7 +22,7 @@ From a Windows development shell:
 
 powershell -ExecutionPolicy Bypass -File .\tools\native-windows-helper\build.ps1
 
-Set up the resulting `nexus-native-helper.exe` on PATH, or place it in the configured NEXUS native-tool directory and package the executable with the private installation.
+Do not place the helper on PATH. Put the resulting `nexus-native-helper.exe` at a fixed local path and configure that absolute path as `tools.nativeHelperPath` in NEXUS. Set `tools.nativeHelperSha256` to the SHA-256 of that exact binary; NEXUS will not invoke the helper on Windows without both the absolute path and matching hash.
 
 ## Authority boundary
 
@@ -30,7 +30,7 @@ The helper is deliberately dumb:
 
 **NEXUS chooses** the target PID, the CPU Set IDs, when the operation is allowed, whether evidence is fresh enough, and whether rollback is required.
 
-**The helper performs** exactly the requested Win32 operation and reports the observed result.
+**The helper performs** exactly the requested Win32 operation and reports the observed result. The caller must identify the exact executable path; NEXUS never falls back to PATH for this third-party helper.
 
 The helper never chooses a process, never interprets a game profile, never decides that a cache domain is beneficial, and never elevates a model/Vesper request.
 

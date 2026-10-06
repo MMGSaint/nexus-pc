@@ -28,6 +28,14 @@ silently failing to apply it. `-Elevated` registers it with highest privileges
 so power-scheme writes succeed; that switch requires an administrator and is a
 real increase in what NEXUS can do to the machine.
 
+**Elevated installs never run the developer checkout directly.** The installer
+copies `dist` and `package.json` into `%ProgramFiles%\NEXUS` by default and
+points Task Scheduler at that protected runtime. This matters because Windows
+honours the task's configured run level; executing a user-writable development
+tree at that level would turn file modification into elevated code execution.
+Use a deliberate `-InstallRoot` under `%ProgramFiles%` only when maintaining a
+different protected installation.
+
 The trigger has a 30 s delay so NEXUS does not compete with everything else
 starting at logon.
 

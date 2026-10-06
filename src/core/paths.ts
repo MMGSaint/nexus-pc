@@ -12,6 +12,7 @@
 
 import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 export interface NexusPaths {
   readonly home: string;
@@ -98,6 +99,18 @@ export function allDirectories(paths: NexusPaths): string[] {
  *
  * Neither is a network listener. NEXUS never binds a TCP or UDP port.
  */
+/** Token-bound Windows endpoint. The secret prevents pre-binding a predictable pipe name. */
+export function ipcEndpointForToken(
+  paths: NexusPaths,
+  token: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform !== 'win32') return ipcEndpoint(paths, platform);
+  if (token.length < 32) throw new Error('NEXUS IPC token is too short to derive a secure endpoint');
+  const digest = createHash('sha256').update(token, 'utf8').digest('hex').slice(0, 32);
+  return `\\\\.\\pipe\\nexus-${digest}`;
+}
+
 export function ipcEndpoint(paths: NexusPaths, platform: NodeJS.Platform = process.platform): string {
   if (platform === 'win32') {
     return `\\\\.\\pipe\\nexus-${endpointDiscriminator(paths.home)}`;

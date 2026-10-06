@@ -32,11 +32,17 @@ export interface DefaultCpuSets {
 
 export interface NativeWindowsHelperOptions {
   readonly executable?: string;
+  readonly expectedSha256?: string;
   readonly timeoutMs?: number;
 }
 
-function helperName(options?: NativeWindowsHelperOptions): string {
-  return options?.executable ?? 'nexus-native-helper.exe';
+function helperName(options?: NativeWindowsHelperOptions): string | null {
+  const executable = options?.executable ?? null;
+  if (process.platform === 'win32' && (!executable || !/^[A-Za-z]:[\\/]/.test(executable))) return null;
+  if (process.platform === 'win32' && (!options?.expectedSha256 || !/^[a-fA-F0-9]{64}$/.test(options.expectedSha256))) {
+    return null;
+  }
+  return executable;
 }
 
 function parseObject(stdout: string): Result<Record<string, unknown>, NexusError> {
@@ -59,12 +65,21 @@ async function call(
   request: Record<string, unknown>,
   options?: NativeWindowsHelperOptions,
 ): Promise<Result<Record<string, unknown>, NexusError>> {
+  const executable = helperName(options);
+  if (!executable) {
+    return err(nexusError('E_UNAVAILABLE', 'native Windows helper is not configured with an absolute executable path'));
+  }
   const result = await runner.run({
-    file: helperName(options),
+    file: executable,
     args: [],
     timeoutMs: options?.timeoutMs ?? 10_000,
     maxOutputBytes: 512 * 1024,
     stdin: JSON.stringify(request) + '\n',
+    ...(options?.expectedSha256 === undefined ? {} : {
+      requireAbsolutePath: true,
+      expectedSha256: options.expectedSha256,
+    }),
+    ...(process.platform === 'win32' ? { requireAbsolutePath: true } : {}),
   });
   if (!result.ok) return err(result.error);
   if (result.value.timedOut) return err(nexusError('E_TIMEOUT', 'native Windows helper timed out'));
@@ -153,7 +168,7 @@ export async function getProcessDefaultCpuSets(
   const result = await call(runner, { command: 'get-default-cpu-sets', pid }, options);
   if (!result.ok) return result;
   const ids = Array.isArray(result.value['ids'])
-    ? result.value['ids'].filter((x): x is number => typeof x === 'number' && Number.isSafeInteger(x) && x > 0).sort((a,b)=>a-b)
+    ? result.value['ids'].filter((x): x is number => typeof x === 'number' && Number.isSafeInteger(x) && x >= 0).sort((a,b)=>a-b)
     : [];
   return ok({ pid, ids, explicitlyAssigned: result.value['explicitlyAssigned'] === true });
 }

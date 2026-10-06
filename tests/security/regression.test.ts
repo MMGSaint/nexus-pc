@@ -484,6 +484,22 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
 
+describe('sensitive process launches stay behind the hardened boundary', () => {
+  it('keeps direct child_process imports constrained', async () => {
+    const files = await readdir(path.join(process.cwd(), 'src'), { withFileTypes: true });
+    expect(files.length).toBeGreaterThan(0);
+    const execSource = await readFile(path.join(process.cwd(), 'src/core/exec.ts'), 'utf8');
+    expect(execSource).toContain("from 'node:child_process'");
+
+    const forbidden = execSource.replace("from 'node:child_process'", "");
+    expect(forbidden).not.toContain("node:child_process");
+    // The persistent shell receives an injected spawn function for testability, but
+    // must never introduce its own node child_process import.
+    const persistent = await readFile(path.join(process.cwd(), 'src/core/persistent-shell.ts'), 'utf8');
+    expect(persistent).not.toContain("node:child_process");
+  });
+});
+ 
 describe('no network listener exists anywhere in the source', () => {
   async function walk(dir: string): Promise<string[]> {
     const out: string[] = [];

@@ -496,6 +496,8 @@ export class NexusRuntime implements VesperHost {
       await this.stages.run('vesper', async () => {
       const token = await ensureToken(this.options.paths, this.ids);
       if (!token.ok) throw token.error;
+      const explicitPipe = this.platform === 'win32' ? this.options.config.vesper.pipeName : null;
+      const endpoint = explicitPipe ?? ipcEndpointForToken(this.options.paths, token.value, this.platform);
       const server = new VesperServer({
         paths: this.options.paths,
         clock: this.clock,
@@ -505,6 +507,7 @@ export class NexusRuntime implements VesperHost {
         scopes: this.options.config.vesper.scopes,
         host: this,
         platform: this.platform,
+        endpoint,
       });
       const started = await server.start();
       if (!started.ok) throw started.error;
@@ -1012,7 +1015,19 @@ export class NexusRuntime implements VesperHost {
       ? APPLICATION_HINTS[applicationId]
       : Object.values(APPLICATION_HINTS).flat();
     const foreground = this.platform === 'win32'
-      ? await getForegroundProcess(this.runner).catch(() => null)
+      ? await getForegroundProcess(
+          this.runner,
+          this.options.config.tools.nativeHelperPath === null
+            ? (this.options.config.tools.nativeHelperSha256 === null
+                ? undefined
+                : { expectedSha256: this.options.config.tools.nativeHelperSha256 })
+            : {
+                executable: this.options.config.tools.nativeHelperPath,
+                ...(this.options.config.tools.nativeHelperSha256 === null
+                  ? {}
+                  : { expectedSha256: this.options.config.tools.nativeHelperSha256 }),
+              },
+        ).catch(() => null)
       : null;
     const foregroundPid = foreground?.ok && foreground.value.available ? foreground.value.pid : null;
 
@@ -1097,7 +1112,20 @@ export class NexusRuntime implements VesperHost {
     if (this.platform !== 'win32') {
       return { available: false, platform: this.platform, detail: 'Windows topology evidence is not currently available on this platform.' };
     }
-    const native = await import('../process/windows-native.js').then((module) => module.getSystemCpuSets(this.runner));
+    const helperOptions =
+      this.options.config.tools.nativeHelperPath === null
+        ? (this.options.config.tools.nativeHelperSha256 === null
+            ? undefined
+            : { expectedSha256: this.options.config.tools.nativeHelperSha256 })
+        : {
+            executable: this.options.config.tools.nativeHelperPath,
+            ...(this.options.config.tools.nativeHelperSha256 === null
+              ? {}
+              : { expectedSha256: this.options.config.tools.nativeHelperSha256 }),
+          };
+    const native = await import('../process/windows-native.js').then((module) =>
+      module.getSystemCpuSets(this.runner, helperOptions),
+    );
     if (!native.ok) {
       return { available: false, platform: this.platform, detail: native.error.message, fidelity: 'unavailable' };
     }

@@ -61,6 +61,8 @@ interface ConnectionState {
   buffer: string;
   requestTimes: number[];
   authenticated: boolean;
+  /** Serialize protocol handling per connection so mutation requests preserve wire order. */
+  processing: Promise<void>;
 }
 
 export class VesperServer {
@@ -154,7 +156,12 @@ export class VesperServer {
   }
 
   private onConnection(socket: net.Socket): void {
-    const state: ConnectionState = { buffer: '', requestTimes: [], authenticated: false };
+    const state: ConnectionState = {
+      buffer: '',
+      requestTimes: [],
+      authenticated: false,
+      processing: Promise.resolve(),
+    };
     this.sockets.add(socket);
     socket.once('close', () => this.sockets.delete(socket));
 
@@ -175,7 +182,13 @@ export class VesperServer {
       while (index >= 0) {
         const line = state.buffer.slice(0, index);
         state.buffer = state.buffer.slice(index + 1);
-        void this.handleLine(socket, line, state);
+        // Never run protocol requests concurrently on one authenticated connection.
+        // The client may send multiple mutations back-to-back; serializing them prevents
+        // request B from observing half-applied state from request A and keeps audit order
+        // consistent with the wire order.
+        state.processing = state.processing
+          .catch(() => undefined)
+          .then(() => this.handleLine(socket, line, state));
         index = state.buffer.indexOf('\n');
       }
     });

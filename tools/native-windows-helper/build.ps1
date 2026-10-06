@@ -10,3 +10,9 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
 
 dotnet publish $project -c Release -o $destination
 Write-Host "Published native helper to $destination"
+
+$helper = Join-Path $destination "nexus-native-helper.exe"
+if (Test-Path $helper) {
+  $sha256 = (Get-FileHash $helper -Algorithm SHA256).Hash
+  Write-Host "Native helper SHA-256: $sha256"
+}
