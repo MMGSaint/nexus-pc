@@ -72,7 +72,7 @@ import { SelfTelemetrySource } from '../telemetry/sources/self.js';
 import { SensorBridgeSource } from '../telemetry/sources/sensor-bridge.js';
 import { LibreHardwareMonitorSource } from '../telemetry/sources/libre-hardware-monitor.js';
 import { PresentMonCollector } from '../performance/presentmon.js';
-import { captureWindowsStability, diffWindowsStability, type StabilitySnapshot } from '../stability/windows-event-oracle.js';
+import { captureWindowsStability, diffWindowsStability } from '../stability/windows-event-oracle.js';
 import { WindowsTelemetrySource } from '../telemetry/sources/windows.js';
 import { summarize } from '../telemetry/summary.js';
 import { createProcessEnumerator } from '../process/enumerate.js';
@@ -1141,26 +1141,39 @@ export class NexusRuntime implements VesperHost {
           data: delta,
         });
         if (delta.unstable) {
-          const restored = await this.performRollback(outcome.checkpointId, 'internal', 'nexus.stability-oracle');
-          if (restored.complete) {
-            outcome = {
-              ...outcome,
-              status: 'applied_rolled_back',
-              rolledBack: true,
-              finishedAtMs: this.clock.now(),
-              summary: `${outcome.summary} NEXUS automatically rolled the change back after new stability events were detected.`,
-            };
-            this.degrade('The stability oracle detected a post-change WHEA/TDR/application crash and rolled the change back.');
-          } else {
+          try {
+            const restored = await this.performRollback(outcome.checkpointId, 'internal', 'nexus.stability-oracle');
+            if (restored.complete) {
+              outcome = {
+                ...outcome,
+                status: 'applied_rolled_back',
+                rolledBack: true,
+                finishedAtMs: this.clock.now(),
+                summary: `${outcome.summary} NEXUS automatically rolled the change back after new stability events were detected.`,
+              };
+              this.degrade('The stability oracle detected a post-change WHEA/TDR/application crash and rolled the change back.');
+              this.runState = 'observation_only';
+            } else {
+              outcome = {
+                ...outcome,
+                status: 'applied_unverified',
+                rolledBack: false,
+                finishedAtMs: this.clock.now(),
+                summary: `${outcome.summary} Stability regression was detected, but rollback was incomplete; NEXUS is observation-only.`,
+              };
+              this.degrade('Stability regression detected and rollback was incomplete.');
+              this.runState = 'observation_only';
+            }
+          } catch (error) {
+            this.degrade(`Stability regression detected but automatic rollback was refused: ${error instanceof Error ? error.message : String(error)}`);
+            this.runState = 'observation_only';
             outcome = {
               ...outcome,
               status: 'applied_unverified',
               rolledBack: false,
               finishedAtMs: this.clock.now(),
-              summary: `${outcome.summary} Stability regression was detected, but rollback was incomplete; NEXUS is observation-only.`,
+              summary: `${outcome.summary} Stability regression was detected but NEXUS could not complete its automatic rollback; the system is observation-only.`,
             };
-            this.degrade('Stability regression detected and rollback was incomplete.');
-            this.runState = 'observation_only';
           }
         }
       }
