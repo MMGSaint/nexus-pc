@@ -1113,13 +1113,13 @@ export class NexusRuntime implements VesperHost {
   }
 
   async runExperiment(request: {
-    origin: 'user' | 'vesper';
-    requestedBy: string;
     applicationId: string;
     repetitions?: number;
     maxCandidates?: number;
     practicalThresholdPercent?: number;
   }): Promise<ExperimentRunResult> {
+    const origin: 'vesper' = 'vesper';
+    const requestedBy = this.requesterId;
     const applicationId = request.applicationId.trim().toLowerCase();
     if (!/^[a-z0-9._-]{1,63}$/.test(applicationId)) {
       return {
@@ -1249,8 +1249,8 @@ export class NexusRuntime implements VesperHost {
 
       for (let repetition = 0; repetition < repetitions; repetition += 1) {
         const outcome = await this.runOptimization({
-          origin: request.origin,
-          requestedBy: request.requestedBy,
+          origin,
+          requestedBy,
           applicationId,
           experimentCandidate: candidate.values,
           transactionalExperiment: true,
@@ -1339,8 +1339,8 @@ export class NexusRuntime implements VesperHost {
     let finalOutcomeId: string | null = null;
     if (winner) {
       const finalOutcome = await this.runOptimization({
-        origin: request.origin,
-        requestedBy: request.requestedBy,
+        origin,
+        requestedBy,
         applicationId,
         experimentCandidate: winner.values,
         sandboxPowerPlan: true,
