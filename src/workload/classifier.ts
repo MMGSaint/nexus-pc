@@ -28,9 +28,8 @@ import type {
   WorkloadClass,
   WorkloadClassification,
   WorkloadSignals,
-  APPLICATION_HINTS,
 } from '../domain/workload.js';
-import { hintIsFresh } from '../domain/workload.js';
+import { APPLICATION_HINTS, hintIsFresh } from '../domain/workload.js';
 
 /**
  * Process-name hints. Matching is substring, case-insensitive, on the
