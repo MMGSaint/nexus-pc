@@ -628,6 +628,8 @@ export class NexusRuntime implements VesperHost {
         vesperListening: this.vesper?.listening ?? false,
         processEnumerator: this.processEnumerator,
         runner: this.runner,
+        presentMonPath: this.options.config.tools.presentMonPath,
+        presentMonSha256: this.options.config.tools.presentMonSha256,
       })),
     );
   }
