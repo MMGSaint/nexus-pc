@@ -41,8 +41,9 @@ function parseSizeBytes(value: string): number | null {
   if (!match?.[1] || !match[2]) return null;
   const n = Number(match[1]);
   if (!Number.isFinite(n) || n <= 0) return null;
-  const mult = { KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3 }[match[2].toUpperCase() as 'KB'|'MB'|'GB'];
-  return Math.round(n * mult);
+  const unit = match[2].toUpperCase();
+  const mult = unit === 'KB' ? 1024 : unit === 'MB' ? 1024 ** 2 : unit === 'GB' ? 1024 ** 3 : 0;
+  return mult === 0 ? null : Math.round(n * mult);
 }
 
 /** Parse the asterisk/dash logical-processor map Coreinfo prints before each cache. */
