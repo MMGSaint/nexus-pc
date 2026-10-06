@@ -46,6 +46,8 @@ export const ALLOWED_EXECUTABLES: readonly string[] = Object.freeze([
   'presentmon',
   // Optional Microsoft Sysinternals topology probe; observation only.
   'coreinfo',
+  // Small signed/native Windows bridge; stdin is JSON and the command set is fixed.
+  'nexus-native-helper',
   // POSIX (development host only)
   'uname',
   'lscpu',
@@ -62,6 +64,8 @@ export interface CommandRequest {
   readonly maxOutputBytes?: number;
   /** Extra environment for the child. Merged onto a minimal inherited set. */
   readonly env?: Readonly<Record<string, string>>;
+  /** Optional bounded stdin payload for allowlisted helper processes. */
+  readonly stdin?: string;
 }
 
 export interface CommandResult {
@@ -128,7 +132,7 @@ export class NodeCommandRunner implements CommandRunner {
           // Never `shell: true`.
           shell: false,
           windowsHide: true,
-          stdio: ['ignore', 'pipe', 'pipe'],
+          stdio: [request.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
           env: buildChildEnv(request.env),
         });
       } catch (e) {
@@ -160,6 +164,8 @@ export class NodeCommandRunner implements CommandRunner {
         if (target === 'out') stdout += chunk.toString('utf8');
         else stderr += chunk.toString('utf8');
       };
+
+      if (request.stdin !== undefined) child.stdin?.end(request.stdin);
 
       child.stdout?.on('data', (c: Buffer) => capture(c, 'out'));
       child.stderr?.on('data', (c: Buffer) => capture(c, 'err'));

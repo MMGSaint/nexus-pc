@@ -139,7 +139,11 @@ export class WorkloadClassifier {
     const matched = (list: readonly string[]): string | null =>
       names.find((n) => list.some((h) => n.includes(h))) ?? null;
 
-    const gameProcess = matched(this.hints.gaming);
+    const gameCandidates = signals.processes.filter((process) =>
+      this.hints.gaming.some((hint) => process.name.toLowerCase().includes(hint)),
+    );
+    const gameProcess = gameCandidates[0]?.name ?? null;
+    const foregroundGameProcess = gameCandidates.find((process) => process.isForeground === true)?.name ?? null;
 
     const detectedApplicationIds = Object.entries(APPLICATION_HINTS)
       .filter(([, hints]) => hints.some((hint) => names.some((name) => name.includes(hint))))
@@ -148,7 +152,16 @@ export class WorkloadClassifier {
     const devProcess = matched(this.hints.development);
     const aiProcess = matched(this.hints.ai);
 
-    if (gameProcess) add('gaming', 0.45, `a known game process is running ("${gameProcess}"; name matching is a heuristic)`);
+    if (gameProcess) {
+      const weight = foregroundGameProcess ? 0.65 : 0.25;
+      add(
+        'gaming',
+        weight,
+        foregroundGameProcess
+          ? `the foreground process is a known game ("${foregroundGameProcess}"; executable matching is corroborating evidence)`
+          : `a known game process is running in the background ("${gameProcess}"; name matching is a weak heuristic)`,
+      );
+    }
     if (streamProcess) {
       add('streaming', 0.5, `a known streaming process is running ("${streamProcess}"; name matching is a heuristic)`);
       if (gameProcess) {
@@ -250,6 +263,9 @@ function missingSignals(signals: WorkloadSignals): string[] {
   if (signals.gpuUtilization === null) missing.push('gpu.utilization');
   if (signals.vramUsedBytes === null || signals.vramTotalBytes === null) missing.push('gpu.vram');
   if (signals.processes.length === 0) missing.push('process.enumerate');
+  if (signals.processes.length > 0 && signals.processes.every((process) => process.isForeground === null)) {
+    missing.push('process.foreground');
+  }
   return missing;
 }
 

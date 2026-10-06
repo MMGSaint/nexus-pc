@@ -91,6 +91,29 @@ describe('WindowsProcessEnumerator', () => {
     expect(runner.requests[0]?.args).toEqual(['/FO', 'CSV', '/NH']);
   });
 
+  it('marks the live foreground process when the native helper is available', async () => {
+    const runner = new ScriptedCommandRunner([
+      {
+        match: (r) => r.file === 'tasklist.exe',
+        result: commandOk(
+          '"SquadGame.exe","4242","Console","1","500,000 K"\r\n"Discord.exe","99","Console","1","1,024 K"\r\n',
+        ),
+      },
+      {
+        match: (r) => r.file === 'nexus-native-helper.exe',
+        result: commandOk(JSON.stringify({
+          ok: true,
+          result: { available: true, pid: 4242, processName: 'SquadGame.exe' },
+        })),
+      },
+    ]);
+    const result = await new WindowsProcessEnumerator(runner, clock).enumerate();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.processes.find((p) => p.pid === 4242)?.isForeground).toBe(true);
+    expect(result.value.processes.find((p) => p.pid === 99)?.isForeground).toBe(false);
+  });
+
   it('caps and ranks by working set when over the limit', async () => {
     const rows = Array.from({ length: 5 }, (_, i) => {
       const mem = (i + 1) * 1000;

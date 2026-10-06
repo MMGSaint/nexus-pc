@@ -57,6 +57,7 @@ import { WindowsHardwareProvider } from '../hardware/providers/windows.js';
 import type { ActuatorContext } from '../optimizer/actuator.js';
 import { ActuatorRegistry, MockControlAdapter } from '../optimizer/actuator.js';
 import { windowsPowerAdapters } from '../optimizer/actuators/windows-power.js';
+import { WindowsPowerPlanSandbox, type PowerPlanWorkspace } from '../optimizer/power-plan-sandbox.js';
 import { OptimizationEngine } from '../optimizer/engine.js';
 import type { ExecutionEnvironment } from '../optimizer/engine.js';
 import { OperationJournal } from '../optimizer/journal.js';
@@ -77,6 +78,7 @@ import { captureWindowsStability, diffWindowsStability } from '../stability/wind
 import { WindowsTelemetrySource } from '../telemetry/sources/windows.js';
 import { mergeSummaries, summarize, summarizePresentMon } from '../telemetry/summary.js';
 import { createProcessEnumerator } from '../process/enumerate.js';
+import { getForegroundProcess } from '../process/windows-native.js';
 import type { ProcessEnumerator } from '../process/enumerate.js';
 import { WorkloadClassifier, signalsFromSnapshot } from '../workload/classifier.js';
 import { ensureToken } from '../vesper/auth.js';
@@ -139,6 +141,7 @@ export class NexusRuntime implements VesperHost {
   private readonly engine: OptimizationEngine;
   /** Mature frame collector; PresentMon owns ETW, NEXUS owns interpretation. */
   private readonly presentMon: PresentMonCollector;
+  private readonly powerSandbox: WindowsPowerPlanSandbox;
   private vesper: VesperServer | null = null;
 
   private startedAtMs = 0;
@@ -166,6 +169,7 @@ export class NexusRuntime implements VesperHost {
     this.runner = options.runner ?? new NodeCommandRunner();
     this.platform = options.platform ?? process.platform;
     this.presentMon = new PresentMonCollector({ runner: this.runner, paths: options.paths });
+    this.powerSandbox = new WindowsPowerPlanSandbox(this.runner);
     this.processEnumerator = createProcessEnumerator({
       platform: this.platform,
       runner: this.runner,
@@ -978,9 +982,20 @@ export class NexusRuntime implements VesperHost {
     if (!enumerated.ok) return null;
 
     const names = Object.values(APPLICATION_HINTS).flat();
+    const foreground = this.platform === 'win32'
+      ? await getForegroundProcess(this.runner).catch(() => null)
+      : null;
+    const foregroundPid = foreground?.ok && foreground.value.available ? foreground.value.pid : null;
+
     const matches = enumerated.value.processes
       .filter((p) => p.pid !== null && names.some((hint) => p.name.toLowerCase().includes(hint)))
-      .sort((a, b) => (b.workingSetBytes ?? -1) - (a.workingSetBytes ?? -1) || (a.pid ?? 0) - (b.pid ?? 0));
+      .sort((a, b) => {
+        const aForeground = foregroundPid !== null && a.pid === foregroundPid ? 1 : 0;
+        const bForeground = foregroundPid !== null && b.pid === foregroundPid ? 1 : 0;
+        return bForeground - aForeground ||
+          (b.workingSetBytes ?? -1) - (a.workingSetBytes ?? -1) ||
+          (a.pid ?? 0) - (b.pid ?? 0);
+      });
 
     const match = matches[0];
     if (!match?.pid || match.pid <= 0) return null;
@@ -994,6 +1009,8 @@ export class NexusRuntime implements VesperHost {
     dryRun?: boolean;
     confirmControls?: readonly ControlId[];
     rollbackPolicy?: ExecutionEnvironment['rollbackPolicy'];
+    /** Experimental: run power-setting experiments on a duplicated plan. */
+    sandboxPowerPlan?: boolean;
   }): Promise<OptimizationOutcome> {
     const workload = await this.analyzeWorkload();
 
@@ -1110,6 +1127,22 @@ export class NexusRuntime implements VesperHost {
       return outcome;
     }
 
+    let powerWorkspace: PowerPlanWorkspace | null = null;
+    const usesPowerControls = proposal.changes.some((change) => change.control.startsWith('power.'));
+    if (request.sandboxPowerPlan && this.platform === 'win32' && usesPowerControls) {
+      const prepared = await this.powerSandbox.prepare();
+      if (!prepared.ok) {
+        return this.engine.noAction('unsafe', `Power-plan sandbox could not be prepared: ${prepared.error.message}`, workload);
+      }
+      powerWorkspace = prepared.value;
+      await this.eventLog.append({
+        kind: 'power.sandbox.prepared',
+        severity: 'info',
+        message: `duplicated active power scheme ${powerWorkspace.originalGuid} into isolated scheme ${powerWorkspace.sandboxGuid}`,
+        data: { originalGuid: powerWorkspace.originalGuid, sandboxGuid: powerWorkspace.sandboxGuid },
+      });
+    }
+
     const beforeSystemSummary = summarize(this.telemetry.history(60_000));
     const frameTarget = workload.workload === 'gaming' || workload.workload === 'gpu_bound'
       ? await this.resolveFrameTarget()
@@ -1159,10 +1192,49 @@ export class NexusRuntime implements VesperHost {
     }
 
     if (!executed.ok) {
+      if (powerWorkspace) {
+        const restored = await this.powerSandbox.restore(powerWorkspace);
+        if (!restored.ok) this.runState = 'observation_only';
+      }
       return this.engine.noAction('unsafe', executed.error.message, workload);
     }
 
     let outcome = executed.value;
+
+    if (powerWorkspace) {
+      if (outcome.status === 'applied_kept') {
+        const named = await this.powerSandbox.keep(powerWorkspace, `NEXUS ${workload.workload}`);
+        if (!named.ok) {
+          this.degrade(`Power-plan sandboxed experiment was kept but could not be named: ${named.error.message}`);
+        }
+        await this.eventLog.append({
+          kind: 'power.sandbox.kept',
+          severity: 'notice',
+          message: `kept isolated power scheme ${powerWorkspace.sandboxGuid} active after a measured experiment`,
+          data: { sandboxGuid: powerWorkspace.sandboxGuid, originalGuid: powerWorkspace.originalGuid },
+        });
+      } else {
+        const restored = await this.powerSandbox.restore(powerWorkspace);
+        if (!restored.ok) {
+          this.degrade(`Power-plan sandbox cleanup failed: ${restored.error.message}`);
+          this.runState = 'observation_only';
+          outcome = {
+            ...outcome,
+            status: 'applied_unverified',
+            summary: `${outcome.summary} The isolated power-plan experiment could not be cleanly restored.`,
+            rolledBack: false,
+            finishedAtMs: this.clock.now(),
+          };
+        } else {
+          await this.eventLog.append({
+            kind: 'power.sandbox.restored',
+            severity: 'info',
+            message: `restored original power scheme ${powerWorkspace.originalGuid} and deleted the experiment clone`,
+            data: { originalGuid: powerWorkspace.originalGuid, sandboxGuid: powerWorkspace.sandboxGuid },
+          });
+        }
+      }
+    }
 
     // Stability is an oracle, not a guess: only a successful before/after Event Log
     // observation may trigger the automatic safety response. Missing Event Log access

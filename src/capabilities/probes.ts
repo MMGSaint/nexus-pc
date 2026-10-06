@@ -18,6 +18,7 @@ import type { ActuatorRegistry } from '../optimizer/actuator.js';
 import { getControl } from '../safety/controls.js';
 import type { ProcessEnumerator } from '../process/enumerate.js';
 import { probeProcessEnumeration } from '../process/enumerate.js';
+import { getForegroundProcess, getSystemCpuSets, getProcessDefaultCpuSets } from '../process/windows-native.js';
 import type { CapabilityProbe, ProbeOutcome } from './registry.js';
 
 function descriptor(
@@ -273,6 +274,87 @@ export function buildCapabilityProbes(sources: () => ProbeSources): CapabilityPr
       },
     });
   }
+
+  probes.push({
+    descriptor: descriptor(
+      'process.foreground',
+      'Foreground process detection',
+      'Read the process ID and executable name of the current Windows foreground window.',
+      { backend: 'nexus-native-helper', hardwareDependent: true },
+    ),
+    trust: 'live',
+    probe: async (): Promise<ProbeOutcome> => {
+      const { runner, platform } = sources();
+      if (platform !== 'win32') return { state: 'unsupported', detail: 'foreground window detection is currently Windows-only' };
+      const result = await getForegroundProcess(runner);
+      if (!result.ok) return { state: 'unavailable', detail: result.error.message };
+      return result.value.available && result.value.pid !== null
+        ? { state: 'available', fidelity: 'live', detail: `foreground PID ${result.value.pid} (${result.value.processName ?? 'unknown process'})` }
+        : { state: 'unavailable', detail: 'Windows reported no usable foreground process' };
+    },
+  });
+
+  probes.push({
+    descriptor: descriptor(
+      'cpu.topology',
+      'Windows CPU Set topology',
+      'Enumerate CPU Set IDs, core/LLC relationships, processor groups, NUMA nodes and scheduling flags.',
+      { backend: 'nexus-native-helper', hardwareDependent: true },
+    ),
+    trust: 'live',
+    probe: async (): Promise<ProbeOutcome> => {
+      const { runner, platform } = sources();
+      if (platform !== 'win32') return { state: 'unsupported', detail: 'CPU Set topology is currently Windows-only' };
+      const result = await getSystemCpuSets(runner);
+      if (!result.ok) return { state: 'unavailable', detail: result.error.message };
+      return result.value.length > 0
+        ? { state: 'available', fidelity: 'live', detail: `${result.value.length} CPU Set(s) enumerated` }
+        : { state: 'unavailable', detail: 'Windows returned no CPU Sets' };
+    },
+  });
+
+  probes.push({
+    descriptor: descriptor(
+      'process.cpuset.read',
+      'Process CPU Set assignments',
+      'Read a process default CPU Set assignment without changing it.',
+      { backend: 'nexus-native-helper', hardwareDependent: true },
+    ),
+    trust: 'live',
+    probe: async (): Promise<ProbeOutcome> => {
+      const { runner, platform } = sources();
+      if (platform !== 'win32') return { state: 'unsupported', detail: 'CPU Set process assignments are currently Windows-only' };
+      const result = await getProcessDefaultCpuSets(runner, process.pid);
+      return result.ok
+        ? { state: 'available', fidelity: 'live', detail: `read CPU-set defaults for NEXUS PID ${process.pid}` }
+        : { state: 'unavailable', detail: result.error.message };
+    },
+  });
+
+  probes.push({
+    descriptor: descriptor(
+      'process.cpuset.write',
+      'Process CPU Set assignment',
+      'Set and verify a process default CPU Set list. This is capability plumbing only; policy and target selection remain outside this probe.',
+      {
+        backend: 'nexus-native-helper',
+        access: 'write',
+        safetyClass: 'reversible',
+        reversibility: 'reversible',
+        requiresElevation: true,
+      },
+    ),
+    trust: 'live',
+    probe: async (): Promise<ProbeOutcome> => {
+      const { runner, platform } = sources();
+      if (platform !== 'win32') return { state: 'unsupported', detail: 'CPU Set process assignment is currently Windows-only' };
+      const topology = await getSystemCpuSets(runner);
+      if (!topology.ok) return { state: 'unavailable', detail: topology.error.message };
+      return topology.value.length > 0
+        ? { state: 'unverified', fidelity: 'live', detail: 'native helper is present and the API topology is readable; NEXUS has not mutated a real process during capability probing' }
+        : { state: 'unavailable', detail: 'no CPU Sets are available' };
+    },
+  });
 
   probes.push({
     descriptor: descriptor(

@@ -64,6 +64,21 @@ describe('classification', () => {
     expect(result.explanation).toContain('process-name heuristic');
   });
 
+  it('does not promote a background game over the observed foreground workload', () => {
+    const result = classifier.classify(
+      signals({
+        cpuUtilization: 35,
+        gpuUtilization: 90,
+        processes: [
+          { name: 'SquadGame.exe', pid: 10, cpuPercent: 25, workingSetBytes: 8_000_000_000, isForeground: false },
+          { name: 'Discord.exe', pid: 20, cpuPercent: 5, workingSetBytes: 1_000_000_000, isForeground: true },
+        ],
+      }),
+    );
+    expect(result.workload).not.toBe('gaming');
+    expect(result.missingSignals).not.toContain('process.foreground');
+  });
+
   it('recognises streaming when an encoder runs alongside a game', () => {
     const result = classifier.classify(
       signals({
