@@ -93,10 +93,9 @@ describe('private target specialization', () => {
 
   it('keeps X3D strategy active even when the GPU or RAM differs', () => {
     const match = specializeTarget(
-      inventory({
-        model: 'AMD Ryzen 9 9950X3D',
-      {},
-      { installedBytes: 64 * 1024 ** 3 },
+      inventory(
+        { model: 'AMD Ryzen 9 9950X3D' },
+        { installedBytes: 64 * 1024 ** 3 },
       ),
     );
     expect(match.id).toBe('x3d-9950x3d');
