@@ -1072,13 +1072,16 @@ export class NexusRuntime implements VesperHost {
         frameCaptureBlocked = true;
       } else {
         this.performanceEvidenceInFlight = true;
-        const seconds = Math.max(1, Math.min(10, Math.ceil(boundedMs / 1000)));
-        const captured = await this.presentMon.capture({
-        processId: frameTarget.processId,
-        seconds,
-        });
-        if (captured.ok) frame = captured.value.summary;
-        this.performanceEvidenceInFlight = false;
+        try {
+          const seconds = Math.max(1, Math.min(10, Math.ceil(boundedMs / 1000)));
+          const captured = await this.presentMon.capture({
+            processId: frameTarget.processId,
+            seconds,
+          });
+          if (captured.ok) frame = captured.value.summary;
+        } finally {
+          this.performanceEvidenceInFlight = false;
+        }
       }
     }
 
