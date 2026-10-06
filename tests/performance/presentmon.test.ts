@@ -44,3 +44,20 @@ describe('PresentMon CSV parser', () => {
     expect(parsePresentMonCsv(csv)).toEqual([{ frameTimeMs: 16 }]);
   });
 });
+
+
+  it('parses current frame-type and presentation cadence columns', () => {
+    const csv = [
+      'Application,ProcessID,FrameTime,MsBetweenPresents,MsBetweenDisplayChange,MsUntilDisplayed,FrameType,FinalState',
+      'Game.exe,99,16.67,16.67,16.67,8.0,Application,Displayed',
+      'Game.exe,99,8.33,8.33,8.33,5.0,AMD AFMF,Displayed',
+      'Game.exe,99,8.33,8.33,8.33,12.0,Repeated,Dropped',
+    ].join('\n');
+
+    const frames = parsePresentMonCsv(csv);
+    expect(frames[0]?.presentIntervalMs).toBeCloseTo(16.67);
+    expect(frames[0]?.displayIntervalMs).toBeCloseTo(16.67);
+    expect(frames[0]?.frameType).toBe('application');
+    expect(frames[1]?.frameType).toBe('amd_afmf');
+    expect(frames[2]?.frameType).toBe('repeated');
+  });
