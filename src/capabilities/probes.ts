@@ -296,7 +296,7 @@ export function buildCapabilityProbes(sources: () => ProbeSources): CapabilityPr
       });
       if (!result.ok) return { state: 'unavailable', detail: result.error.message };
       if (result.value.code !== 0) return { state: 'unavailable', detail: result.value.stderr.trim() || 'PresentMon did not report a usable version' };
-      return { state: 'available', fidelity: 'live', backendVersion: result.value.stdout.trim().split(/\s+/).pop(), detail: 'PresentMon executable responded successfully' };
+      const version = result.value.stdout.trim().split(/\s+/).pop();\n      return version === undefined\n        ? { state: 'available', fidelity: 'live', detail: 'PresentMon executable responded successfully' }\n        : { state: 'available', fidelity: 'live', backendVersion: version, detail: 'PresentMon executable responded successfully' };
     },
   });
 
