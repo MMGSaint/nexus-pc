@@ -109,10 +109,11 @@ Rules the bridge is held to:
 - Values still pass plausibility validation like any other reading.
 - An unknown field rejects the whole document.
 
-**Trust boundary.** The document must live inside the NEXUS home, which is a
-per-user directory created with restrictive permissions. Anything able to write
-there already runs as the user. This is stated rather than glossed over: the
-bridge is not a security boundary, it is an integration point.
+**Trust boundary.** The HTTP bridge is loopback-only (`127.0.0.1`, `localhost`, or `::1`),
+uses no credentials, and rejects malformed/oversized payloads before readings are trusted.
+The bridge is not a security boundary: another process running as the same user may still
+reach the local endpoint. Its job is to keep the external sensor implementation outside the
+NEXUS process and make provenance/freshness explicit.
 
 **Consequence.** Until a bridge exists, `cpu.telemetry.temperature` and the GPU
 thermal capabilities are `unavailable`, and every control with a thermal
