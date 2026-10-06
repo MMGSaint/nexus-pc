@@ -229,6 +229,7 @@ describe('capability probe wiring', () => {
         platform: 'win32',
         vesperListening: false,
         processEnumerator: enumerator,
+        runner,
       })),
     );
     await registry.probeAll(2_000);
