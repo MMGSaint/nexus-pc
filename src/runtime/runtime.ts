@@ -70,6 +70,9 @@ import { MockTelemetrySource, SIMULATED_IDLE } from '../telemetry/sources/mock.j
 import { OsMemorySource } from '../telemetry/sources/os-memory.js';
 import { SelfTelemetrySource } from '../telemetry/sources/self.js';
 import { SensorBridgeSource } from '../telemetry/sources/sensor-bridge.js';
+import { LibreHardwareMonitorSource } from '../telemetry/sources/libre-hardware-monitor.js';
+import { PresentMonCollector } from '../performance/presentmon.js';
+import { captureWindowsStability, diffWindowsStability, type StabilitySnapshot } from '../stability/windows-event-oracle.js';
 import { WindowsTelemetrySource } from '../telemetry/sources/windows.js';
 import { summarize } from '../telemetry/summary.js';
 import { createProcessEnumerator } from '../process/enumerate.js';
@@ -133,6 +136,8 @@ export class NexusRuntime implements VesperHost {
   private readonly baselines: BaselineStore;
   private readonly profiles: ProfileStore;
   private readonly engine: OptimizationEngine;
+  /** Mature frame collector; PresentMon owns ETW, NEXUS owns interpretation. */
+  private readonly presentMon: PresentMonCollector;
   private vesper: VesperServer | null = null;
 
   private startedAtMs = 0;
@@ -159,6 +164,7 @@ export class NexusRuntime implements VesperHost {
     this.ids = options.ids ?? systemIds;
     this.runner = options.runner ?? new NodeCommandRunner();
     this.platform = options.platform ?? process.platform;
+    this.presentMon = new PresentMonCollector({ runner: this.runner, paths: options.paths });
     this.processEnumerator = createProcessEnumerator({
       platform: this.platform,
       runner: this.runner,
@@ -497,6 +503,9 @@ export class NexusRuntime implements VesperHost {
       this.telemetry.register(new MockTelemetrySource(SIMULATED_IDLE));
     } else if (this.platform === 'win32') {
       this.telemetry.register(new WindowsTelemetrySource({ clock: this.clock, logger: this.logger }));
+      // Prefer a mature hardware monitor when it is running; the existing file bridge
+      // remains available for installations that use a custom native helper instead.
+      this.telemetry.register(new LibreHardwareMonitorSource({ clock: this.clock, logger: this.logger }));
     } else if (this.platform === 'linux') {
       this.telemetry.register(new LinuxTelemetrySource());
     }
@@ -1082,6 +1091,10 @@ export class NexusRuntime implements VesperHost {
     }
 
     const beforeSummary = summarize(this.telemetry.history(60_000));
+    const stabilityBefore =
+      this.platform === 'win32'
+        ? await captureWindowsStability(this.runner, this.clock.now() - 5 * 60_000, this.clock.now()).catch(() => null)
+        : null;
     this.optimizationInFlight = true;
     let executed;
     try {
@@ -1110,7 +1123,49 @@ export class NexusRuntime implements VesperHost {
       return this.engine.noAction('unsafe', executed.error.message, workload);
     }
 
-    const outcome = executed.value;
+    let outcome = executed.value;
+
+    // Stability is an oracle, not a guess: only a successful before/after Event Log
+    // observation may trigger the automatic safety response. Missing Event Log access
+    // never counts as "zero incidents".
+    if (outcome.status === 'applied_kept' && outcome.checkpointId && stabilityBefore?.ok) {
+      const after = await captureWindowsStability(this.runner, stabilityBefore.value.capturedAtMs, this.clock.now()).catch(() => null);
+      if (after?.ok) {
+        const delta = diffWindowsStability(stabilityBefore.value, after.value);
+        await this.eventLog.append({
+          kind: 'stability.observed',
+          severity: delta.unstable ? 'error' : 'info',
+          message: delta.unstable
+            ? `post-optimization stability regression detected (WHEA ${delta.whea}, TDR ${delta.displayTdr}, app crashes ${delta.appCrashes})`
+            : 'post-optimization stability check found no new WHEA/TDR/application crash events',
+          data: delta,
+        });
+        if (delta.unstable) {
+          const restored = await this.performRollback(outcome.checkpointId, 'internal', 'nexus.stability-oracle');
+          if (restored.complete) {
+            outcome = {
+              ...outcome,
+              status: 'applied_rolled_back',
+              rolledBack: true,
+              finishedAtMs: this.clock.now(),
+              summary: `${outcome.summary} NEXUS automatically rolled the change back after new stability events were detected.`,
+            };
+            this.degrade('The stability oracle detected a post-change WHEA/TDR/application crash and rolled the change back.');
+          } else {
+            outcome = {
+              ...outcome,
+              status: 'applied_unverified',
+              rolledBack: false,
+              finishedAtMs: this.clock.now(),
+              summary: `${outcome.summary} Stability regression was detected, but rollback was incomplete; NEXUS is observation-only.`,
+            };
+            this.degrade('Stability regression detected and rollback was incomplete.');
+            this.runState = 'observation_only';
+          }
+        }
+      }
+    }
+
     this.outcomes.set(outcome.id, outcome);
     for (const change of outcome.appliedChanges) {
       this.appliedHistory.push({ control: change.control, appliedAtMs: change.appliedAtMs });
@@ -1212,6 +1267,11 @@ export class NexusRuntime implements VesperHost {
 
   get telemetryPipeline(): TelemetryPipeline {
     return this.telemetry;
+  }
+
+  /** On-demand PresentMon evidence for bounded A/B experiments and the future UI. */
+  get presentMonCollector(): PresentMonCollector {
+    return this.presentMon;
   }
 
   get capabilityRegistry(): CapabilityRegistry {
