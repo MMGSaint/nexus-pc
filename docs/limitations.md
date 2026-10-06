@@ -28,17 +28,14 @@ temperature you cannot read — is exactly the behaviour this system is built to
 avoid. But it does mean the out-of-the-box value on a stock Windows install is
 mostly observation until a bridge exists.
 
-## Power-plan edits touch the user's active scheme
+## Power-plan edits and sandboxing
 
-NEXUS modifies the **active** power scheme and checkpoints the exact prior
-index of every setting it changes. That is fully reversible and verified.
-
-The safer design duplicates the user's scheme with `powercfg /duplicatescheme`
-and edits only the copy, so the user's own plan is never touched at all. That
-is the planned next step and is not implemented here — it adds state and
-parsing that could not be validated on Windows in this environment. Until then,
-if you have a hand-tuned power plan, note that NEXUS edits it in place (and can
-put it back).
+The normal power adapters still target the active scheme and checkpoint the exact prior
+index of every setting they change. The merged stack also includes an explicit
+`powercfg /duplicatescheme` transaction sandbox that can duplicate, activate, verify,
+restore, and delete an isolated plan. It is opt-in (`sandboxPowerPlan`) because the
+remaining Windows behaviour is still target-PC dependent; the normal checkpoint and
+rollback machinery remains authoritative.
 
 ## Process evidence is optional and heuristic
 
