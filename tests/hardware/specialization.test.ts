@@ -8,7 +8,10 @@ import {
   specializeTarget,
 } from '../../src/hardware/specialization.js';
 
-function inventory(overrides: Partial<HardwareInventory['cpu']> = {}): HardwareInventory {
+function inventory(
+  cpuOverrides: Partial<HardwareInventory['cpu']> = {},
+  memoryOverrides: Partial<HardwareInventory['memory']> = {},
+): HardwareInventory {
   return {
     capturedAtMs: 1,
     fidelity: 'live',
@@ -25,7 +28,7 @@ function inventory(overrides: Partial<HardwareInventory['cpu']> = {}): HardwareI
       socket: 'AM5',
       architecture: '64-bit',
       features: [],
-      ...overrides,
+      ...cpuOverrides,
     },
     gpus: [
       {
@@ -58,6 +61,7 @@ function inventory(overrides: Partial<HardwareInventory['cpu']> = {}): HardwareI
       ratedSpeedMhz: 6000,
       memoryType: 'DDR5',
       availableSource: 'test',
+      ...memoryOverrides,
     },
     os: {
       platform: 'win32',
@@ -91,8 +95,9 @@ describe('private target specialization', () => {
     const match = specializeTarget(
       inventory({
         model: 'AMD Ryzen 9 9950X3D',
-        installedBytes: 64 * 1024 ** 3,
-      }),
+      {},
+      { installedBytes: 64 * 1024 ** 3 },
+      ),
     );
     expect(match.id).toBe('x3d-9950x3d');
     expect(match.exactHardwareMatch).toBe(false);
