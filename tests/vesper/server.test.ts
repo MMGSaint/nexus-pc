@@ -83,7 +83,10 @@ async function startServer(
   const eventLog = new EventLog({ paths, clock, logger, sessionId: 'sess' });
   await eventLog.open();
 
-  const endpoint = path.join(home, 'v.sock');
+  const endpoint =
+    process.platform === 'win32'
+      ? `\\\\.\\pipe\\nexus-vesper-test-${path.basename(home)}`
+      : path.join(home, 'v.sock');
   const server = new VesperServer({
     paths,
     clock,
@@ -92,7 +95,7 @@ async function startServer(
     token: TOKEN,
     scopes,
     host,
-    platform: 'linux',
+    platform: process.platform,
     endpoint,
   });
   const started = await server.start();

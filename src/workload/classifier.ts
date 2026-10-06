@@ -144,6 +144,7 @@ export class WorkloadClassifier {
     );
     const gameProcess = gameCandidates[0]?.name ?? null;
     const foregroundGameProcess = gameCandidates.find((process) => process.isForeground === true)?.name ?? null;
+    const anyForegroundObserved = signals.processes.some((process) => process.isForeground === true);
 
     const detectedApplicationIds = Object.entries(APPLICATION_HINTS)
       .filter(([, hints]) => hints.some((hint) => names.some((name) => name.includes(hint))))
@@ -153,12 +154,19 @@ export class WorkloadClassifier {
     const aiProcess = matched(this.hints.ai);
 
     if (gameProcess) {
-      const weight = foregroundGameProcess ? 0.65 : 0.25;
+      const weight =
+        streamProcess && foregroundGameProcess
+          ? 0.35
+          : foregroundGameProcess
+            ? 0.65
+            : anyForegroundObserved
+              ? 0.25
+              : 0.4;
       add(
         'gaming',
         weight,
         foregroundGameProcess
-          ? `the foreground process is a known game ("${foregroundGameProcess}"; executable matching is corroborating evidence)`
+          ? `the foreground process is a known game ("${foregroundGameProcess}"; executable matching is a corroborating heuristic)`
           : `a known game process is running in the background ("${gameProcess}"; name matching is a weak heuristic)`,
       );
     }

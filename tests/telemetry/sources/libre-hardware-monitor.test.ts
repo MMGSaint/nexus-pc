@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import { LibreHardwareMonitorSource, validateLhmPayload } from '../../../src/telemetry/sources/libre-hardware-monitor.js';
 import { validateReading } from '../../../src/telemetry/validation.js';
 

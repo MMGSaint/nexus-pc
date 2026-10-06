@@ -176,9 +176,37 @@ describe('single instance', () => {
     await second.shutdown('test');
   });
 
-  it('reclaims a stale socket left by a crashed process', async () => {
+  it('reclaims stale POSIX sockets and round-trips the Windows named-pipe lock', async () => {
     const home = await tempHome();
     const paths = resolvePaths(home);
+
+    if (process.platform === 'win32') {
+      const first = new InstanceLock({
+        paths,
+        clock: new FixedClock(),
+        logger,
+        sessionId: 's1',
+        nexusVersion: '0.1.0',
+        platform: 'win32',
+      });
+      const acquired = await first.acquire();
+      expect(acquired.ok).toBe(true);
+      await first.release();
+
+      const second = new InstanceLock({
+        paths,
+        clock: new FixedClock(),
+        logger,
+        sessionId: 's2',
+        nexusVersion: '0.1.0',
+        platform: 'win32',
+      });
+      const reacquired = await second.acquire();
+      expect(reacquired.ok).toBe(true);
+      await second.release();
+      return;
+    }
+
     const lock = new InstanceLock({
       paths,
       clock: new FixedClock(),
@@ -192,7 +220,7 @@ describe('single instance', () => {
 
     // Simulate a crash: the socket file survives but nothing is listening.
     await lock.release();
-    await writeFile(lock.endpoint, '', 'utf8').catch(() => undefined);
+    await writeFile(lock.endpoint, '', 'utf8');
 
     const second = new InstanceLock({
       paths,
