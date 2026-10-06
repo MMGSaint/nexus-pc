@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { captureWindowsStability, diffWindowsStability } from '../../../src/stability/windows-event-oracle.js';
-import { ScriptedCommandRunner, commandOk } from '../../../src/core/exec.js';
+import { captureWindowsStability, diffWindowsStability } from '../../src/stability/windows-event-oracle.js';
+import { ScriptedCommandRunner, commandOk } from '../../src/core/exec.js';
 
 describe('Windows stability oracle', () => {
   it('parses the built-in Event Log query response', async () => {
