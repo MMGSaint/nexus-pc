@@ -74,7 +74,7 @@ describe('WindowsProcessPlacementController', () => {
         ),
       },
     ]);
-    const result = await new WindowsProcessPlacementController(runner).planForCacheDomain(99, 7);
+    const result = await new WindowsProcessPlacementController(runner, { executable: HELPER }).planForCacheDomain(99, 7);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.target).toEqual([10, 11]);
