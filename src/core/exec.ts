@@ -301,15 +301,31 @@ export interface ScriptedResponse {
 export class ScriptedCommandRunner implements CommandRunner {
   readonly requests: CommandRequest[] = [];
   private readonly responses: ScriptedResponse[];
+  private readonly consumed: boolean[];
 
   constructor(responses: ScriptedResponse[] = []) {
     this.responses = responses;
+    this.consumed = responses.map(() => false);
   }
 
   async run(request: CommandRequest): Promise<Result<CommandResult, NexusError>> {
     this.requests.push(request);
     if (!isAllowedExecutable(request.file)) {
       return err(nexusError('E_INVALID_INPUT', `executable is not on the NEXUS allowlist: ${request.file}`));
+    }
+
+    // Treat scripted responses as a FIFO queue per matching predicate. This makes
+    // tests with the same executable/method shape deterministic across repeated
+    // calls (e.g. get-active-scheme before and after activation), while preserving
+    // the historical behaviour of reusing the last matching response for loops
+    // that intentionally probe the same state repeatedly.
+    for (let i = 0; i < this.responses.length; i += 1) {
+      const response = this.responses[i];
+      if (!response?.match(request)) continue;
+      if (!this.consumed[i]) {
+        this.consumed[i] = true;
+        return response.result;
+      }
     }
     for (const response of this.responses) {
       if (response.match(request)) return response.result;
