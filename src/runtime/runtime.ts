@@ -1138,7 +1138,14 @@ export class NexusRuntime implements VesperHost {
           message: delta.unstable
             ? `post-optimization stability regression detected (WHEA ${delta.whea}, TDR ${delta.displayTdr}, app crashes ${delta.appCrashes})`
             : 'post-optimization stability check found no new WHEA/TDR/application crash events',
-          data: delta,
+          data: {
+            whea: delta.whea,
+            displayTdr: delta.displayTdr,
+            appCrashes: delta.appCrashes,
+            werEvents: delta.werEvents,
+            totalErrors: delta.totalErrors,
+            unstable: delta.unstable,
+          },
         });
         if (delta.unstable) {
           try {
