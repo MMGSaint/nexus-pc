@@ -27,7 +27,7 @@ import type { Fidelity } from '../core/fidelity.js';
 import type { Result } from '../core/result.js';
 import { err, ok } from '../core/result.js';
 import type { ProcessObservation } from '../domain/workload.js';
-import { getForegroundProcess } from './windows-native.js';
+import { getForegroundProcess, type NativeWindowsHelperOptions } from './windows-native.js';
 
 /** Soft ceiling so a pathological process table cannot flood the classifier. */
 export const DEFAULT_MAX_PROCESSES = 512;
@@ -58,6 +58,8 @@ export interface ProcessEnumeratorFactoryOptions {
   readonly clock: Clock;
   /** Override /proc root — tests only. */
   readonly procRoot?: string;
+  /** Trusted native helper configuration for Windows foreground evidence. */
+  readonly nativeHelperOptions?: NativeWindowsHelperOptions;
 }
 
 export function createProcessEnumerator(options: ProcessEnumeratorFactoryOptions): ProcessEnumerator {
@@ -65,7 +67,7 @@ export function createProcessEnumerator(options: ProcessEnumeratorFactoryOptions
     return new LinuxProcessEnumerator(options.clock, options.procRoot ?? '/proc');
   }
   if (options.platform === 'win32') {
-    return new WindowsProcessEnumerator(options.runner, options.clock);
+    return new WindowsProcessEnumerator(options.runner, options.clock, options.nativeHelperOptions);
   }
   return new UnsupportedProcessEnumerator(options.platform, options.clock);
 }
@@ -181,10 +183,12 @@ export class WindowsProcessEnumerator implements ProcessEnumerator {
 
   private readonly runner: CommandRunner;
   private readonly clock: Clock;
+  private readonly nativeHelperOptions?: NativeWindowsHelperOptions;
 
-  constructor(runner: CommandRunner, clock: Clock) {
+  constructor(runner: CommandRunner, clock: Clock, nativeHelperOptions?: NativeWindowsHelperOptions) {
     this.runner = runner;
     this.clock = clock;
+    this.nativeHelperOptions = nativeHelperOptions;
   }
 
   async enumerate(options: EnumerateOptions = {}): Promise<Result<ProcessEnumeration, NexusError>> {
@@ -214,7 +218,7 @@ export class WindowsProcessEnumerator implements ProcessEnumerator {
       return err(nexusError('E_UNAVAILABLE', 'tasklist produced no process rows'));
     }
 
-    const foreground = await getForegroundProcess(this.runner).catch(() => null);
+    const foreground = await getForegroundProcess(this.runner, this.nativeHelperOptions).catch(() => null);
     const enriched = foreground?.ok && foreground.value.available && foreground.value.pid !== null
       ? parsed.value.map((process) => ({ ...process, isForeground: process.pid === foreground.value.pid }))
       : parsed.value;
