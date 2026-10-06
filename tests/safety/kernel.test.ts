@@ -328,7 +328,7 @@ describe('SafetyKernel — runtime and rate gating', () => {
 
   it('blocks a non-experiment control even when transactional mode is requested', () => {
     const verdict = kernel.evaluate(
-      proposal({ changes: [change('power.processor.min_state', 20)] }),
+      proposal({ changes: [change('power.processor.core_parking_min', 20)] }),
       safetyContext({ transactionalExperiment: true }),
     );
     expect(codes(verdict)).toContain('EXPERIMENT_CONTROL_NOT_ALLOWED');

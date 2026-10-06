@@ -101,7 +101,7 @@ describe('WindowsProcessEnumerator', () => {
         ),
       },
       {
-        match: (r) => r.file === 'nexus-native-helper.exe',
+        match: (r) => r.file === NATIVE_HELPER.executable,
         result: commandOk(JSON.stringify({
           ok: true,
           result: { available: true, pid: 4242, processName: 'SquadGame.exe' },
