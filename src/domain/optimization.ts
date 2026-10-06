@@ -136,6 +136,7 @@ export interface OptimizationOutcome {
   readonly verdict?: SafetyVerdict;
   readonly appliedChanges: readonly AppliedChange[];
   readonly rolledBack: boolean;
+  readonly stabilityRegression?: boolean;
   readonly checkpointId: string | null;
   readonly measurements: readonly MeasurementDelta[];
   readonly summary: string;
