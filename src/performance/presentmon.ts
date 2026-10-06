@@ -21,6 +21,7 @@ import {
   summarizeFrames,
   type FramePerformanceSummary,
   type FrameSample,
+  type FrameType,
 } from './stats.js';
 
 export interface PresentMonCaptureRequest {
@@ -72,6 +73,16 @@ function parseNumber(value: string | undefined): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function parseFrameType(value: string | undefined): FrameType | undefined {
+  const normalized = (value ?? '').trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === 'application' || normalized === 'app') return 'application';
+  if (normalized === 'repeated' || normalized === 'repeat') return 'repeated';
+  if (normalized.includes('amd') && normalized.includes('afmf')) return 'amd_afmf';
+  if (normalized.includes('xefg') || normalized.includes('intel')) return 'intel_xefg';
+  return 'unknown';
+}
+
 function parseBoolDropped(fields: Record<string, string>): boolean | undefined {
   const candidate = fields.Dropped ?? fields.dropped ?? fields.FinalState ?? fields.finalState ?? fields.PresentResult;
   if (candidate === undefined) return undefined;
@@ -101,13 +112,23 @@ export function parsePresentMonCsv(csv: string): FrameSample[] {
       parseNumber(row.MsUntilDisplayed) ??
       parseNumber(row.DisplayLatency) ??
       parseNumber(row.msUntilDisplayed);
+    const presentIntervalMs =
+      parseNumber(row.MsBetweenPresents) ??
+      parseNumber(row.BetweenPresents);
+    const displayIntervalMs =
+      parseNumber(row.MsBetweenDisplayChange) ??
+      parseNumber(row.BetweenDisplayChange);
     const dropped = parseBoolDropped(row);
+    const frameType = parseFrameType(row.FrameType);
 
     samples.push({
       frameTimeMs: frameTime,
       ...(gpuTimeMs === null ? {} : { gpuTimeMs }),
       ...(cpuBusyMs === null ? {} : { cpuBusyMs }),
       ...(displayLatencyMs === null ? {} : { displayLatencyMs }),
+      ...(presentIntervalMs === null ? {} : { presentIntervalMs }),
+      ...(displayIntervalMs === null ? {} : { displayIntervalMs }),
+      ...(frameType === undefined ? {} : { frameType }),
       ...(dropped === undefined ? {} : { dropped }),
     });
   }
@@ -152,6 +173,8 @@ export class PresentMonCollector {
       '--session_name', session,
       '--no_console_stats',
       '--v2_metrics',
+      '--track_frame_type',
+      '--track_app_timing',
       '--output_file', csvPath,
       ...(input.processId === undefined ? ['--process_name', input.processName!] : ['--process_id', String(input.processId)]),
     ];
