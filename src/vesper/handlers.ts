@@ -54,6 +54,7 @@ export interface VesperHost {
   getStatus(): Promise<HealthReport>;
   getCapabilities(): Promise<readonly CapabilityRecord[]>;
   getTelemetrySummary(windowMs: number): Promise<TelemetrySummary>;
+  getPerformanceEvidence(windowMs: number, applicationId?: string): Promise<unknown>;
   getCurrentProfile(): Promise<{ readonly profile: ProfileDocument | null; readonly appliedAtMs: number | null }>;
   listProfiles(): Promise<readonly ProfileView[]>;
   analyzeWorkload(): Promise<WorkloadClassification>;
@@ -63,6 +64,8 @@ export interface VesperHost {
   optimize(params: { readonly profileId?: string; readonly dryRun?: boolean }): Promise<OptimizationOutcome>;
   rollback(checkpointId: string): Promise<RestoreResult>;
   getOptimizationResult(outcomeId: string): Promise<OptimizationOutcome | null>;
+  getDecisionEvidence(outcomeId: string): Promise<unknown>;
+  getTopology(): Promise<unknown>;
   /** Identifier recorded on Vesper-origin requests, for audit. */
   readonly requesterId: string;
   /** The runtime's clock, so handler timestamps stay deterministic in tests. */
@@ -104,6 +107,10 @@ export async function dispatch(
     case 'getTelemetrySummary': {
       const summary = await host.getTelemetrySummary(params?.windowMs ?? 60_000);
       return okResult(summary.fidelity, summary);
+    }
+
+    case 'getPerformanceEvidence': {
+      return okResult((await host.getTelemetrySummary(params?.windowMs ?? 30_000)).fidelity, await host.getPerformanceEvidence(params?.windowMs ?? 30_000, params?.applicationId));
     }
 
     case 'getCurrentProfile': {
@@ -159,6 +166,16 @@ export async function dispatch(
       // mock adapters is `mocked`, however complete it was. An incomplete
       // restore is `unverified` regardless of what performed it.
       return okResult(restored.complete ? restored.fidelity : 'unverified', restored);
+    }
+
+    case 'getDecisionEvidence': {
+      if (!params?.outcomeId) return errResult(nexusError('E_INVALID_INPUT', 'getDecisionEvidence requires an outcomeId'));
+      const evidence = await host.getDecisionEvidence(params.outcomeId);
+      return evidence === null ? errResult(nexusError('E_UNAVAILABLE', `no decision evidence with id ${params.outcomeId}`)) : okResult('live', evidence);
+    }
+
+    case 'getTopology': {
+      return okResult('live', await host.getTopology());
     }
 
     case 'getOptimizationResult': {
