@@ -22,9 +22,7 @@
  * in an unbounded loop.
  */
 
-import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { spawn } from 'node:child_process';
-
+import { spawnNexusChild, type ChildProcessWithoutNullStreams } from './exec.js';
 import type { Clock } from './clock.js';
 import type { NexusError } from './errors.js';
 import { nexusError, toNexusError } from './errors.js';
@@ -85,7 +83,7 @@ export class PersistentShell {
       maxRestarts: options.maxRestarts ?? 3,
       restartWindowMs: options.restartWindowMs ?? 300_000,
       maxLineBytes: options.maxLineBytes ?? 1024 * 1024,
-      spawnFn: options.spawnFn ?? ((file, args) => spawn(file, [...args], { windowsHide: true, shell: false }) as ChildProcessWithoutNullStreams),
+      spawnFn: options.spawnFn ?? ((file, args) => spawnNexusChild(file, args)),
     };
   }
 
