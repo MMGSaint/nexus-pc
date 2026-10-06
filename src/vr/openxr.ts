@@ -1,6 +1,6 @@
 import type { CommandRunner } from '../core/exec.js';
 import { parsePowerShellJson, runPowerShell } from '../core/exec.js';
-import type { NexusError } from '../core/errors.js';
+import { nexusError, type NexusError } from '../core/errors.js';
 import { err, ok } from '../core/result.js';
 import type { Result } from '../core/result.js';
 
@@ -29,11 +29,11 @@ const SCRIPT = [
 export async function readOpenXrRuntime(runner: CommandRunner): Promise<Result<OpenXrRuntimeIdentity, NexusError>> {
   const result = await runPowerShell(runner, SCRIPT, { timeoutMs: 10_000 });
   if (!result.ok) return err(result.error);
-  if (result.value.timedOut) return err({ code: 'E_TIMEOUT', message: 'OpenXR runtime probe timed out', retryable: true } as NexusError);
-  if (result.value.code !== 0) return err({ code: 'E_UNAVAILABLE', message: result.value.stderr.trim() || 'OpenXR runtime probe failed', retryable: true } as NexusError);
+  if (result.value.timedOut) return err(nexusError('E_TIMEOUT', 'OpenXR runtime probe timed out'));
+  if (result.value.code !== 0) return err(nexusError('E_UNAVAILABLE', result.value.stderr.trim() || 'OpenXR runtime probe failed'));
   const parsed = parsePowerShellJson(result.value.stdout);
   if (!parsed.ok) return err(parsed.error);
-  if (!parsed.value || typeof parsed.value !== 'object' || Array.isArray(parsed.value)) return err({ code: 'E_IO', message: 'OpenXR runtime probe returned invalid JSON', retryable: false } as NexusError);
+  if (!parsed.value || typeof parsed.value !== 'object' || Array.isArray(parsed.value)) return err(nexusError('E_IO', 'OpenXR runtime probe returned invalid JSON'));
   const row = parsed.value as Record<string, unknown>;
   const path = typeof row.manifestPath === 'string' && row.manifestPath.trim() ? row.manifestPath.trim() : null;
   return ok({
