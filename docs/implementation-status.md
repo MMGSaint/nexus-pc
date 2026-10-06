@@ -39,7 +39,7 @@ Exercised by the automated suite and verified to behave as described.
 | Vesper interface | Path-based transport only; token auth; scope enforcement with mutating scopes ungranted by default; strict payload validation; depth/size/rate bounds; fidelity on every response |
 | Process execution | Executable allowlist; no shell; dynamic values passed via environment, never interpolated into script text; NUL rejection |
 | Windows discovery parsing | `qwMemorySize` preferred over `AdapterRAM`; saturated `AdapterRAM` rejected; powercfg output parsing; DDR5 detection; EXPO-not-applied warning |
-| Process enumeration (portable) | Linux `/proc` enumerator (pid, comm, optional RSS); tasklist CSV parsing; capability probe success→available / failure→unavailable; classifier receives process evidence as optional corroboration (never overrides telemetry); capped sample ranked by working set |
+| Process enumeration (portable) | Linux `/proc` enumerator (pid, comm, optional RSS); Windows `tasklist` CSV parsing with foreground-process enrichment; capability probe success→available / failure→unavailable; classifier receives process evidence as optional corroboration (never overrides telemetry); capped sample ranked by working set |
 
 ## IMPLEMENTED + HARDWARE DEPENDENT
 
