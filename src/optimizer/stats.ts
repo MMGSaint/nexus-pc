@@ -1,0 +1,1 @@
+/** Shared statistical primitives for optimizer decisions.\n * The canonical implementation lives with the frame-performance domain so\n * PresentMon and optimizer A/B decisions use exactly the same math.\n */\nexport { bootstrapInterval, mean, statisticallyCredibleImprovement } from '../performance/stats.js';\nexport type { BootstrapInterval } from '../performance/stats.js';\n
