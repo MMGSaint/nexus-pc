@@ -46,12 +46,11 @@ describe('native Windows bridge', () => {
 
 describe('WindowsProcessPlacementController', () => {
   it('derives a cache-domain target from observed CPU Sets and detects drift', async () => {
-    let calls = 0;
     const runner = new ScriptedCommandRunner([
       {
         match: r =>
           r.file === 'nexus-native-helper.exe' &&
-          r.stdin?.includes('"command":"get-default-cpu-sets"'),
+          r.stdin?.includes('"command":"get-default-cpu-sets"') === true,
         result: commandOk(JSON.stringify({
           ok: true,
           result: { pid: 99, ids: [], explicitlyAssigned: false },
@@ -60,7 +59,7 @@ describe('WindowsProcessPlacementController', () => {
       {
         match: r =>
           r.file === 'nexus-native-helper.exe' &&
-          r.stdin?.includes('"command":"topology"'),
+          r.stdin?.includes('"command":"topology"') === true,
         result: commandOk(JSON.stringify({
           ok: true,
           result: [
