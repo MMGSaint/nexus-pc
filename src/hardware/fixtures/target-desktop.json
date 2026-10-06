@@ -1,15 +1,15 @@
 {
   "$comment": "Fixture describing the intended NEXUS target machine. This is a MODEL of that hardware, used for development and tests. Anything derived from it is labelled 'mocked' and can never be reported as a live measurement.",
   "id": "target-desktop",
-  "description": "Ryzen 9 9950X / Radeon RX 7900 XT 20GB / 96GB DDR5 / Windows 11",
+  "description": "Ryzen 9 9950X3D / Radeon RX 7900 XT 20GB / 96GB DDR5 / Windows 11",
   "cpu": {
-    "model": "AMD Ryzen 9 9950X 16-Core Processor",
+    "model": "AMD Ryzen 9 9950X3D 16-Core Processor",
     "vendor": "AuthenticAMD",
     "family": "AMD64 Family 26 Model 68 Stepping 0",
     "physicalCores": 16,
     "logicalProcessors": 32,
     "baseClockMhz": null,
-    "maxClockMhz": 4300,
+    "maxClockMhz": 5700,
     "socket": "AM5",
     "architecture": "64-bit",
     "features": ["smt", "avx2", "avx512"]
