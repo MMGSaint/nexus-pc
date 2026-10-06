@@ -8,7 +8,7 @@ import { err, ok } from '../core/result.js';
 import type { NexusError } from '../core/errors.js';
 import { nexusError } from '../core/errors.js';
 import { ensureDir, listFiles, readJson, writeJson, removeFile } from '../core/fsx.js';
-import { vNumber, vObject, vString, vUnknown } from '../core/validate.js';
+import { vNullable, vNumber, vObject, vString, vUnknown } from '../core/validate.js';
 import type { ControlValue } from '../domain/control.js';
 import type { ExperimentFingerprint } from './experiment-plan.js';
 
@@ -31,9 +31,9 @@ const schema = vObject({
   applicationId: vString({ maxLength: 128 }),
   candidate: vUnknown(),
   decision: vString({ maxLength: 32 }),
-  scorePercent: vNumber(),
-  confidenceLowPercent: vNumber(),
-  confidenceHighPercent: vNumber(),
+  scorePercent: vNullable(vNumber()),
+  confidenceLowPercent: vNullable(vNumber()),
+  confidenceHighPercent: vNullable(vNumber()),
   createdAtMs: vNumber({ min: 0 }),
   detail: vString({ maxLength: 2000 }),
 });
