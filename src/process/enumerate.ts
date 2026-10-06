@@ -183,7 +183,7 @@ export class WindowsProcessEnumerator implements ProcessEnumerator {
 
   private readonly runner: CommandRunner;
   private readonly clock: Clock;
-  private readonly nativeHelperOptions?: NativeWindowsHelperOptions;
+  private readonly nativeHelperOptions: NativeWindowsHelperOptions | undefined;
 
   constructor(runner: CommandRunner, clock: Clock, nativeHelperOptions?: NativeWindowsHelperOptions) {
     this.runner = runner;
