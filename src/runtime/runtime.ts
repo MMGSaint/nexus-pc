@@ -496,6 +496,8 @@ export class NexusRuntime implements VesperHost {
       await this.stages.run('vesper', async () => {
       const token = await ensureToken(this.options.paths, this.ids);
       if (!token.ok) throw token.error;
+      const explicitPipe = this.platform === 'win32' ? this.options.config.vesper.pipeName : null;
+      const endpoint = explicitPipe ?? ipcEndpointForToken(this.options.paths, token.value, this.platform);
       const server = new VesperServer({
         paths: this.options.paths,
         clock: this.clock,
@@ -505,7 +507,7 @@ export class NexusRuntime implements VesperHost {
         scopes: this.options.config.vesper.scopes,
         host: this,
         platform: this.platform,
-        endpoint: ipcEndpointForToken(this.options.paths, token.value, this.platform),
+        endpoint,
       });
       const started = await server.start();
       if (!started.ok) throw started.error;
