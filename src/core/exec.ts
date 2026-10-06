@@ -143,10 +143,10 @@ export function resolveTrustedSystemExecutable(
   // subdirectory rather than directly under System32. Keep the path explicit:
   // NEXUS must not fall back to PATH for a system executable.
   if (basename === 'powershell') {
-    return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    return path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
   }
 
-  return path.join(systemRoot, 'System32', `${basename}.exe`);
+  return path.win32.join(systemRoot, 'System32', `${basename}.exe`);
 }
 
 export class NodeCommandRunner implements CommandRunner {
