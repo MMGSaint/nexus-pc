@@ -1075,6 +1075,7 @@ export class NexusRuntime implements VesperHost {
       measurements: outcome.measurements,
       checkpointId: outcome.checkpointId,
       rolledBack: outcome.rolledBack,
+      stabilityRegression: outcome.stabilityRegression ?? false,
       safetyDecision: outcome.verdict
         ? {
             decision: outcome.verdict.decision,
@@ -1361,6 +1362,25 @@ export class NexusRuntime implements VesperHost {
           onMeasurementWindow: (windowMs) => this.telemetry.enterOptimizationMode(windowMs),
           ...(request.rollbackPolicy === undefined ? {} : { rollbackPolicy: request.rollbackPolicy }),
           ...(request.transactionalExperiment === undefined ? {} : { transactionalExperiment: request.transactionalExperiment }),
+          ...(stabilityBefore?.ok
+            ? {
+                stabilityCheck: async () => {
+                  const after = await captureWindowsStability(
+                    this.runner,
+                    stabilityBefore.value.capturedAtMs,
+                    this.clock.now(),
+                  ).catch(() => null);
+                  if (!after?.ok) return null;
+                  const delta = diffWindowsStability(stabilityBefore.value, after.value);
+                  return {
+                    unstable: delta.unstable,
+                    detail: delta.unstable
+                      ? `new WHEA/TDR/application-crash evidence: WHEA ${delta.whea}, TDR ${delta.displayTdr}, app crashes ${delta.appCrashes}`
+                      : 'stability oracle observed no new WHEA/TDR/application-crash events while the candidate was active',
+                  };
+                },
+              }
+            : {}),
         },
         this.actuatorContext,
       );
@@ -1414,67 +1434,6 @@ export class NexusRuntime implements VesperHost {
       }
     }
 
-    // Stability is an oracle, not a guess: only a successful before/after Event Log
-    // observation may trigger the automatic safety response. Missing Event Log access
-    // never counts as "zero incidents".
-    if (outcome.status === 'applied_kept' && outcome.checkpointId && stabilityBefore?.ok) {
-      const after = await captureWindowsStability(this.runner, stabilityBefore.value.capturedAtMs, this.clock.now()).catch(() => null);
-      if (after?.ok) {
-        const delta = diffWindowsStability(stabilityBefore.value, after.value);
-        await this.eventLog.append({
-          kind: 'stability.observed',
-          severity: delta.unstable ? 'error' : 'info',
-          message: delta.unstable
-            ? `post-optimization stability regression detected (WHEA ${delta.whea}, TDR ${delta.displayTdr}, app crashes ${delta.appCrashes})`
-            : 'post-optimization stability check found no new WHEA/TDR/application crash events',
-          data: {
-            whea: delta.whea,
-            displayTdr: delta.displayTdr,
-            appCrashes: delta.appCrashes,
-            werEvents: delta.werEvents,
-            totalErrors: delta.totalErrors,
-            unstable: delta.unstable,
-          },
-        });
-        if (delta.unstable) {
-          try {
-            const restored = await this.performRollback(outcome.checkpointId, 'internal', 'nexus.stability-oracle');
-            if (restored.complete) {
-              outcome = {
-                ...outcome,
-                status: 'applied_rolled_back',
-                rolledBack: true,
-                stabilityRegression: true,
-                finishedAtMs: this.clock.now(),
-                summary: `${outcome.summary} NEXUS automatically rolled the change back after new stability events were detected.`,
-              };
-              this.degrade('The stability oracle detected a post-change WHEA/TDR/application crash and rolled the change back.');
-              this.runState = 'observation_only';
-            } else {
-              outcome = {
-                ...outcome,
-                status: 'applied_unverified',
-                rolledBack: false,
-                finishedAtMs: this.clock.now(),
-                summary: `${outcome.summary} Stability regression was detected, but rollback was incomplete; NEXUS is observation-only.`,
-              };
-              this.degrade('Stability regression detected and rollback was incomplete.');
-              this.runState = 'observation_only';
-            }
-          } catch (error) {
-            this.degrade(`Stability regression detected but automatic rollback was refused: ${error instanceof Error ? error.message : String(error)}`);
-            this.runState = 'observation_only';
-            outcome = {
-              ...outcome,
-              status: 'applied_unverified',
-              rolledBack: false,
-              finishedAtMs: this.clock.now(),
-              summary: `${outcome.summary} Stability regression was detected but NEXUS could not complete its automatic rollback; the system is observation-only.`,
-            };
-          }
-        }
-      }
-    }
 
     this.outcomes.set(outcome.id, outcome);
     if (!request.transactionalExperiment) {
