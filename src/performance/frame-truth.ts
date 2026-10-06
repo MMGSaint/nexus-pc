@@ -46,6 +46,14 @@ export function requireFrameBenefit(
     return { decision: 'insufficient_evidence', scorePercent: null, reason: 'Frame-truth evidence is not live or does not contain enough samples on both sides.' };
   }
   const candidates: number[] = [];
+  const generationChanged =
+    before.summary.generatedFrameFraction !== null && after.summary.generatedFrameFraction !== null &&
+    Math.abs(after.summary.generatedFrameFraction - before.summary.generatedFrameFraction) >= 0.05;
+  const nativeFps = generationChanged
+    ? before.summary.applicationFps !== null && after.summary.applicationFps !== null && before.summary.applicationFps !== 0
+      ? ((after.summary.applicationFps - before.summary.applicationFps) / Math.abs(before.summary.applicationFps)) * 100
+      : null
+    : null;
   const average = relativeDelta(before.summary.averageFrameTimeMs, after.summary.averageFrameTimeMs);
   const p95 = relativeDelta(before.summary.p95FrameTimeMs, after.summary.p95FrameTimeMs);
   const p99 = relativeDelta(before.summary.p99FrameTimeMs, after.summary.p99FrameTimeMs);
@@ -57,10 +65,12 @@ export function requireFrameBenefit(
     candidates.push(((after.summary.fps0_1PercentLow - before.summary.fps0_1PercentLow) / Math.abs(before.summary.fps0_1PercentLow)) * 100);
   }
   for (const value of [average, p95, p99, stddev]) if (value !== null) candidates.push(value);
+  if (nativeFps !== null) candidates.push(nativeFps);
   if (!candidates.length) return { decision: 'insufficient_evidence', scorePercent: null, reason: 'No comparable frame-time or low-FPS measurements were available.' };
   const score = candidates.reduce((a, b) => a + b, 0) / candidates.length;
   const droppedRegression = before.summary.droppedFramesKnown && after.summary.droppedFramesKnown && after.summary.droppedFrames > before.summary.droppedFrames;
-  if (droppedRegression || score <= -Math.abs(p.maxRegressionPercent)) {
+  const latencyRegression = before.summary.displayLatencyP95Ms !== null && after.summary.displayLatencyP95Ms !== null && after.summary.displayLatencyP95Ms > before.summary.displayLatencyP95Ms * 1.1;
+  if (droppedRegression || latencyRegression || score <= -Math.abs(p.maxRegressionPercent)) {
     return { decision: 'regression', scorePercent: score, reason: droppedRegression ? 'Dropped frames increased after the change.' : 'Composite frame-quality score regressed by ' + score.toFixed(2) + '%.' };
   }
   if (score >= Math.abs(p.minImprovementPercent)) return { decision: 'benefit', scorePercent: score, reason: 'Composite frame-quality score improved by ' + score.toFixed(2) + '%.' };
