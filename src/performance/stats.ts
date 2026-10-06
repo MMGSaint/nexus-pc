@@ -148,7 +148,11 @@ export function statisticallyCredibleImprovement(
   deltaPercent: readonly number[],
   options: { readonly practicalThresholdPercent?: number; readonly seed?: number } = {},
 ): BootstrapInterval & { readonly keep: boolean } {
-  const ci = bootstrapInterval(deltaPercent, mean, { seed: options.seed });
+  const ci = bootstrapInterval(
+    deltaPercent,
+    mean,
+    options.seed === undefined ? {} : { seed: options.seed },
+  );
   const threshold = Math.abs(options.practicalThresholdPercent ?? 1);
   const keep =
     ci.estimate !== null &&
