@@ -37,7 +37,12 @@ export interface NexusPaths {
 
 export function defaultHome(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
   const override = env['NEXUS_HOME'];
-  if (override && override.trim() !== '') return path.resolve(override);
+  if (override && override.trim() !== '') {
+    // Respect the explicit platform argument so callers/tests are deterministic
+    // even when they emulate another OS on the host running Node.
+    const resolver = platform === 'win32' ? path.win32 : path.posix;
+    return resolver.resolve(override);
+  }
 
   if (platform === 'win32') {
     const localAppData = env['LOCALAPPDATA'];

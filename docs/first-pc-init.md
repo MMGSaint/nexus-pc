@@ -23,20 +23,21 @@ on this machine; it says nothing yet about your hardware.
 
 ---
 
-## 1. Install and establish startup
+## 1. Build NEXUS without registering startup yet
+
+Run the build and validation from the repository, but **do not register the
+logon task yet**. The first bring-up should be a manually launched, observable
+process so a bad discovery result or provider failure cannot immediately become
+part of every login.
 
 ```powershell
-.\scripts\windows\install-nexus.ps1
+npm ci
+npm run verify
+npm run build
 ```
 
-Registers a logon task at normal privilege. Do **not** pass `-Elevated` yet —
-first find out what NEXUS can do without it.
-
-Verify:
-
-```powershell
-Get-ScheduledTask -TaskName NEXUS
-```
+The startup script is still available later. It should be used only after
+discovery, telemetry, baseline and rollback have been checked on this machine.
 
 ---
 
@@ -220,7 +221,7 @@ one controlled change has been measured, and rollback has been proven.
 
 ## What to report back
 
-If anything in steps 2–4 or 12 does not match, capture:
+If anything in steps 2–4, 9, 12, or the startup registration does not match, capture:
 
 ```powershell
 node dist\cli\main.js doctor --json  > nexus-doctor.json

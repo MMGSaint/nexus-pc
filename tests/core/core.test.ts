@@ -204,7 +204,7 @@ describe('redaction', () => {
 
 describe('paths', () => {
   it('honours NEXUS_HOME', () => {
-    expect(defaultHome({ NEXUS_HOME: '/custom/place' } as NodeJS.ProcessEnv, 'linux')).toBe('/custom/place');
+    expect(defaultHome({ NEXUS_HOME: '/custom/place' } as NodeJS.ProcessEnv, 'linux')).toBe(path.posix.resolve('/custom/place'));
   });
 
   it('uses LOCALAPPDATA on Windows', () => {

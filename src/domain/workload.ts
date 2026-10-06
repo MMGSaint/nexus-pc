@@ -26,6 +26,20 @@ export const WORKLOAD_CLASSES = [
 ] as const;
 export type WorkloadClass = (typeof WORKLOAD_CLASSES)[number];
 
+/**
+ * Known application identities are labels for profile selection, not authority.
+ * Matching is case-insensitive substring matching against observed executable names.
+ */
+export const APPLICATION_HINTS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  squad: Object.freeze(['squadgame', 'squad']),
+  'where-winds-meet': Object.freeze(['wherewindsmeet']),
+  vrchat: Object.freeze(['vrchat']),
+  'red-dead-redemption-2': Object.freeze(['rdr2']),
+  'cyberpunk-2077': Object.freeze(['cyberpunk']),
+  'helldivers-2': Object.freeze(['helldivers']),
+  'elden-ring': Object.freeze(['eldenring']),
+});
+
 export interface ProcessObservation {
   readonly name: string;
   readonly pid: number | null;
@@ -53,6 +67,8 @@ export interface ClassificationCandidate {
 }
 
 export interface WorkloadClassification {
+  /** Stable application ids detected from executable-name heuristics. */
+  readonly detectedApplicationIds?: readonly string[];
   readonly timestampMs: number;
   readonly workload: WorkloadClass;
   /** 0..1. Below `MIN_ACTIONABLE_CONFIDENCE` NEXUS refuses to act on it. */

@@ -23,6 +23,51 @@ nexus profiles show gaming  # every setting, with the reason for each
 
 Every setting carries a rationale, shown verbatim by `nexus profiles show`.
 
+## Per-application profiles
+
+Profiles may optionally declare `applicationIds`. When NEXUS observes a matching
+executable name, and that profile also targets the observed workload, NEXUS prefers
+the application-specific profile over the generic workload profile. The match is a
+process-name heuristic: it does not prove that the game is the foreground window
+and it never bypasses the confidence, capability, thermal, confirmation, or
+rollback checks.
+
+Recognized ids currently include `squad`, `where-winds-meet`, `vrchat`,
+`red-dead-redemption-2`, `cyberpunk-2077`, `helldivers-2`, and `elden-ring`.
+An id being recognized does not mean NEXUS has a vendor-approved "correct" setting
+for that title; the settings in a profile are still explicit configuration that
+must be validated on the user's machine.
+
+Example:
+
+```jsonc
+{
+  "id": "squad-low-latency",
+  "name": "Squad — my validated profile",
+  "description": "Settings I chose after measuring Squad on this machine",
+  "version": 1,
+  "author": "user",
+  "targets": ["gaming"],
+  "applicationIds": ["squad"],
+  "settings": [
+    {
+      "control": "power.processor.min_state",
+      "value": 20,
+      "rationale": "Validated against my normal Squad workload"
+    }
+  ],
+  "requiresCapabilities": ["power.setting.read", "power.setting.write"]
+}
+```
+
+### AMD driver boundary
+
+NEXUS does **not** own AMD Adrenalin game profiles or driver settings. It does not
+change Adrenalin's per-game presets, Radeon tuning, clocks, voltage, fan curves,
+or driver installation. Those controls are deliberately outside the NEXUS control
+registry. This keeps NEXUS from fighting vendor software or treating a driver-side
+change as though it were a NEXUS-controlled optimization.
+
 ## What is deliberately absent
 
 No registry "tweaks" of contested value, no service disabling, no memory

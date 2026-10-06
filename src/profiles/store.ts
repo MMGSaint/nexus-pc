@@ -25,6 +25,7 @@ import {
   vEnum,
   vNumber,
   vObject,
+  vOptional,
   vString,
   vUnion,
 } from '../core/validate.js';
@@ -44,6 +45,7 @@ const profileSchema = vObject({
   version: vNumber({ integer: true, min: 1, max: 1_000_000 }),
   author: vEnum(['builtin', 'user']),
   targets: vArray(vEnum(WORKLOAD_CLASSES), { maxItems: 16 }),
+  applicationIds: vOptional(vArray(vString({ maxLength: 64, pattern: /^[a-z0-9][a-z0-9._-]{0,63}$/ }), { maxItems: 16 })),
   settings: vArray(
     vObject({
       control: vString({ maxLength: 128 }),
@@ -239,10 +241,17 @@ export class ProfileStore {
   }
 
   /** Best profile for a workload, or undefined when none targets it. */
-  suggestFor(workload: string): LoadedProfile | undefined {
-    return this.list().find(
+  suggestFor(workload: string, detectedApplicationIds: readonly string[] = []): LoadedProfile | undefined {
+    const candidates = this.list().filter(
       (p) => p.profile.id !== 'observation' && p.profile.targets.includes(workload as never),
     );
+    if (detectedApplicationIds.length > 0) {
+      const appSpecific = candidates.find((p) =>
+        (p.profile.applicationIds ?? []).some((id) => detectedApplicationIds.includes(id)),
+      );
+      if (appSpecific) return appSpecific;
+    }
+    return candidates[0];
   }
 
   async parseFile(file: string): Promise<Result<ProfileDocument, NexusError>> {

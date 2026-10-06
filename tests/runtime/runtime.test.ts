@@ -49,7 +49,9 @@ async function makeRuntime(home: string, config: NexusConfig = simulatedConfig()
     logger,
     ids: new SequentialIds(),
     runner: new ScriptedCommandRunner(),
-    platform: 'linux',
+    // Exercise the host OS transport (not a simulated OS), while hardware and
+    // telemetry remain fully fixture-backed above.
+    platform: process.platform,
     wait: async () => undefined,
   });
 }

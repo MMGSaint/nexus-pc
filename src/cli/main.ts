@@ -218,6 +218,7 @@ async function runCommand(
             heading(`Profile: ${found.name}`),
             `  ${found.description}`,
             `  Applicable here: ${found.applicableHere ? 'yes' : 'no'}`,
+            `  Applications   ${found.applicationIds?.length ? found.applicationIds.join(', ') : 'generic workload profile'}`,
             '  Changes exactly these settings, and nothing else:',
             ...(found.settings.length === 0
               ? ['    (none)']
@@ -231,7 +232,7 @@ async function runCommand(
         [
           heading('Profiles'),
           ...profiles.map(
-            (p) => `  ${p.id.padEnd(14)} ${p.settings.length} setting(s)  ${p.applicableHere ? '' : '[not applicable here] '}${p.description.split('.')[0]}.`,
+            (p) => `  ${p.id.padEnd(14)} ${p.settings.length} setting(s)  ${p.applicableHere ? '' : '[not applicable here] '}${p.applicationIds?.length ? `[apps: ${p.applicationIds.join(', ')}] ` : ''}${p.description.split('.')[0]}.`,
           ),
         ].join('\n'),
       );
@@ -246,6 +247,7 @@ async function runCommand(
         [
           heading('Recommendation'),
           `  Workload   ${recommendation.workload.workload} (confidence ${(recommendation.workload.confidence * 100).toFixed(0)}%)`,
+          `  Applications ${recommendation.workload.detectedApplicationIds?.length ? recommendation.workload.detectedApplicationIds.join(', ') : 'none recognized'}`,
           `  Profile    ${text(recommendation.recommendedProfileId)}`,
           `  Rationale  ${recommendation.rationale}`,
           ...(recommendation.proposedChanges.length === 0
