@@ -58,6 +58,15 @@ an unavailable capability rather than an incorrect action.
 | `install-nexus.ps1` | Task Scheduler registration on the target machine | Task is not registered; NEXUS does not start at logon |
 | `WindowsProcessEnumerator` (`tasklist`) | `tasklist.exe /FO CSV /NH` output shape and foreground-window access on real Windows | Probe fails; `process.enumerate` stays unavailable; classification runs without process evidence and lists it in `missingSignals` |
 
+### IMPLEMENTED + HARDWARE DEPENDENT
+
+| Component | What is unverified | Failure mode if wrong |
+|---|---|---|
+| `LibreHardwareMonitorSource` | Real LHM web endpoint payloads and sensor naming on the target | Source becomes unavailable/invalid; thermal-gated controls remain refused |
+| `PresentMonCollector` / frame truth | PresentMon installation/version and real frame-type/display attribution on the target | Frame evidence is unavailable; benefit decisions fall back to the available measured evidence |
+| OpenXR active-runtime probe | Real registry/runtime manifest state on the target | VR capability is reported unavailable/unsupported; VR-specific changes are refused |
+| Display driver identity | Real `Win32_PnPSignedDriver` result on the target | Driver identity is unavailable; a matching baseline is not assumed across unknown driver state |
+
 ## MOCKED / SIMULATED
 
 Deliberately synthetic. Everything derived from these is labelled `mocked` and
