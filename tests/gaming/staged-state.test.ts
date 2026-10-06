@@ -15,7 +15,7 @@ test('staged changes activate only in their declared context', () => {
 });
 
 test('expired changes are not returned', () => {
-  const expiring = { ...items[0], expiresAtMs: 5 };
+  const expiring: StagedChange = { ...items[0]!, expiresAtMs: 5 };
   assert.equal(expireStagedChanges([expiring], 5).length, 0);
 });
 
