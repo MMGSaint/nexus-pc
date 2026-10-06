@@ -1222,6 +1222,18 @@ export class NexusRuntime implements VesperHost {
       }
     }
 
+    await this.eventLog.append({
+      kind: 'experiment.started',
+      severity: 'notice',
+      message: `started private tuner experiment for ${applicationId}`,
+      data: {
+        applicationId,
+        repetitions: Math.max(2, Math.min(4, Math.floor(request.repetitions ?? 3))),
+        maxCandidates: Math.max(2, Math.min(8, request.maxCandidates ?? 6)),
+        controls: [...TRANSACTIONAL_EXPERIMENT_CONTROLS],
+      },
+    });
+
     const current = await this.currentControlValues();
     const dimensions = defaultPrivateX3dDimensions(current);
     const candidates = makeCandidateGrid(dimensions, Math.max(2, Math.min(8, request.maxCandidates ?? 6)));
@@ -1265,11 +1277,27 @@ export class NexusRuntime implements VesperHost {
       trials.push({
         candidateId: candidate.id,
         candidate: candidate.values,
-        repetitions,
+        repetitions: outcomeIds.length,
         deltaPercent: deltas,
         decision,
         stabilityRegression,
         outcomeIds,
+      });
+      
+      await this.eventLog.append({
+        kind: 'experiment.trial',
+        severity: stabilityRegression ? 'error' : 'info',
+        message: `candidate ${candidate.id} completed: ${decision.explanation}`,
+        data: {
+          applicationId,
+          candidateId: candidate.id,
+          repetitions: outcomeIds.length,
+          deltaPercent: deltas,
+          keep: decision.keep,
+          stabilityRegression,
+          confidenceLowPercent: decision.score.low,
+          confidenceHighPercent: decision.score.high,
+        },
       });
 
       if (stabilityRegression || this.runState === 'observation_only') break;
@@ -1370,14 +1398,34 @@ export class NexusRuntime implements VesperHost {
     };
     await this.experimentStore.save(record);
 
+    const finalStatus = winner ? 'kept' : 'inconclusive';
+
+    await this.eventLog.append({
+      kind: 'experiment.completed',
+      severity: finalStatus === 'kept' ? 'notice' : 'info',
+      message: winner
+        ? `private tuner selected and verified a winner for ${applicationId}`
+        : `private tuner found no candidate worth keeping for ${applicationId}`,
+      data: {
+        applicationId,
+        status: finalStatus,
+        winner: winner?.id ?? null,
+        scoreMetric: bestTrial ? 'frame.1pct_low' : 'frame.1pct_low',
+        scorePercent: bestScore.estimate,
+        confidenceLowPercent: bestScore.low,
+        confidenceHighPercent: bestScore.high,
+        finalOutcomeId,
+      },
+    });
+
     return {
-      status: winner ? 'kept' : 'inconclusive',
+      status: finalStatus,
       applicationId,
       fingerprint,
       candidates,
       trials,
       winner,
-      scoreMetric: bestTrial ? 'frame.1pct_low' : 'frame.1pct_low',
+      scoreMetric: 'frame.1pct_low',
       score: bestScore,
       finalOutcomeId,
       detail: winner
