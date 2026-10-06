@@ -505,6 +505,7 @@ export class NexusRuntime implements VesperHost {
         scopes: this.options.config.vesper.scopes,
         host: this,
         platform: this.platform,
+        endpoint: ipcEndpointForToken(this.options.paths, token.value, this.platform),
       });
       const started = await server.start();
       if (!started.ok) throw started.error;
