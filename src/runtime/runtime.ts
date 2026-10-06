@@ -354,6 +354,21 @@ export class NexusRuntime implements VesperHost {
         this.degrade(outcome.summary);
         this.runState = 'observation_only';
       }
+      if (this.platform === 'win32') {
+        const sandbox = await this.powerSandbox.recoverOrphaned();
+        if (!sandbox.ok) {
+          this.degrade(`An orphaned power-plan experiment could not be safely recovered: ${sandbox.error.message}`);
+          this.runState = 'observation_only';
+        } else if (sandbox.value === 'restored') {
+          await this.eventLog.append({
+            kind: 'power.sandbox.restored',
+            severity: 'critical',
+            message: 'recovered an orphaned power-plan experiment after an unexpected shutdown',
+            data: { recovery: true },
+          });
+        }
+      }
+
       const restored = await this.restoreAppliedHistory();
       return restored > 0 ? `${outcome.summary} Carried ${restored} recent change(s) forward.` : outcome.summary;
     });
