@@ -18,6 +18,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
@@ -100,6 +101,15 @@ export interface CommandRunner {
 
 export const DEFAULT_TIMEOUT_MS = 10_000;
 export const DEFAULT_MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
+
+/** Spawn a NEXUS-controlled child with non-shell, pipe-only semantics. */
+export function spawnNexusChild(file: string, args: readonly string[]): ChildProcessWithoutNullStreams {
+  return spawn(file, [...args], {
+    shell: false,
+    windowsHide: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  }) as ChildProcessWithoutNullStreams;
+}
 
 /**
  * Extract the executable name from a path.
