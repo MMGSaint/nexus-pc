@@ -23,7 +23,23 @@ on this machine; it says nothing yet about your hardware.
 
 ---
 
-## 1. Install and establish startup
+## 1. Build NEXUS without registering startup yet
+
+Run the build and validation from the repository, but **do not register the
+logon task yet**. The first bring-up should be a manually launched, observable
+process so a bad discovery result or provider failure cannot immediately become
+part of every login.
+
+```powershell
+npm ci
+npm run verify
+npm run build
+```
+
+The startup script is still available later. It should be used only after
+discovery, telemetry, baseline and rollback have been checked on this machine.
+
+---
 
 ```powershell
 .\scripts\windows\install-nexus.ps1
