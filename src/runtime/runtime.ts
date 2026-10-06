@@ -1195,7 +1195,7 @@ export class NexusRuntime implements VesperHost {
     maxCandidates?: number;
     practicalThresholdPercent?: number;
   }): Promise<ExperimentRunResult> {
-    const origin: 'vesper' = 'vesper';
+    const origin = 'vesper';
     const requestedBy = this.requesterId;
     const applicationId = request.applicationId.trim().toLowerCase();
     if (!/^[a-z0-9._-]{1,63}$/.test(applicationId)) {
