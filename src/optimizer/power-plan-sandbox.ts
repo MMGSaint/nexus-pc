@@ -18,14 +18,14 @@ import type { Result } from '../core/result.js';
 import { ensureDir, readJson, removeFile, writeJson } from '../core/fsx.js';
 import { err, ok } from '../core/result.js';
 import type { NexusPaths } from '../core/paths.js';
-import { vBoolean, vObject, vString } from '../core/validate.js';
+import { vBoolean, vEnum, vObject, vString } from '../core/validate.js';
 
 const GUID = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
 const workspaceSchema = vObject({
   originalGuid: vString({ maxLength: 64 }),
   sandboxGuid: vString({ maxLength: 64 }),
   active: vBoolean(),
-  mode: vString({ maxLength: 32 }),
+  mode: vEnum(['transaction', 'kept'] as const),
 });
 
 export interface PowerPlanWorkspace {
@@ -149,7 +149,13 @@ export class WindowsPowerPlanSandbox {
       }
     }
     const persisted = await this.persist({ ...workspace, mode: 'kept' });
-    if (!persisted.ok) return persisted;
+    if (!persisted.ok) {
+      // A kept clone that cannot be durably recorded is unsafe to leave active:
+      // crash recovery would still believe this is a temporary transaction and
+      // could delete the user's intended winner. Restore the original instead.
+      await this.restore(workspace);
+      return persisted;
+    }
     return ok(true);
   }
 
