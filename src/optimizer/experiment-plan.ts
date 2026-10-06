@@ -1,6 +1,5 @@
 import type { ControlId, ControlValue } from '../domain/control.js';
 import {
-  bootstrapInterval,
   mean,
   statisticallyCredibleImprovement,
   type BootstrapInterval,
