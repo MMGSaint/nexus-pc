@@ -100,6 +100,8 @@ const configSchema = vObject({
   vesper: vOptional(
     vObject({
       enabled: vOptional(vBoolean()),
+      /** Explicit legacy Windows named pipe. Omit to use the token-bound secure default. */
+      pipeName: vOptional(vString({ maxLength: 256, pattern: /^\\\\\.\\pipe\\[A-Za-z0-9._-]+$/ })),
       /** Scopes granted to an authenticated Vesper client. */
       scopes: vOptional(vArray(vString({ maxLength: 64 }), { maxItems: 32 })),
     }),
@@ -199,6 +201,7 @@ export async function loadConfig(paths: NexusPaths): Promise<Result<NexusConfig,
     telemetry,
     vesper: {
       enabled: raw.vesper?.enabled ?? DEFAULT_CONFIG.vesper.enabled,
+      pipeName: raw.vesper?.pipeName ?? null,
       scopes: raw.vesper?.scopes ?? DEFAULT_CONFIG.vesper.scopes,
     },
     simulate: {
@@ -228,7 +231,11 @@ export function serializeConfig(config: NexusConfig): Record<string, unknown> {
     mode: config.mode,
     logLevel: config.logLevel,
     telemetry: { ...config.telemetry },
-    vesper: { enabled: config.vesper.enabled, scopes: [...config.vesper.scopes] },
+    vesper: {
+      enabled: config.vesper.enabled,
+      ...(config.vesper.pipeName === null ? {} : { pipeName: config.vesper.pipeName }),
+      scopes: [...config.vesper.scopes],
+    },
     simulate: {
       ...(config.simulate.hardwareFixture === null
         ? {}
