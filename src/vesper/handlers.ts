@@ -181,10 +181,20 @@ export async function dispatch(
         ...(params.maxCandidates === undefined ? {} : { maxCandidates: params.maxCandidates }),
         ...(params.practicalThresholdPercent === undefined ? {} : { practicalThresholdPercent: params.practicalThresholdPercent }),
       });
-      const fidelity =
-        typeof result === 'object' && result !== null && !Array.isArray(result) &&
-        (result as Record<string, unknown>).fingerprint !== null
-          ? 'live'
+      // The experiment result carries provenance aggregated from every trial/final
+      // verification outcome. A fingerprint proves identity of the experiment inputs,
+      // not that the measurements were live.
+      const reportedFidelity =
+        typeof result === 'object' && result !== null && !Array.isArray(result)
+          ? (result as Record<string, unknown>).fidelity
+          : undefined;
+      const fidelity: Fidelity =
+        reportedFidelity === 'live' ||
+        reportedFidelity === 'simulated' ||
+        reportedFidelity === 'mocked' ||
+        reportedFidelity === 'unverified' ||
+        reportedFidelity === 'unavailable'
+          ? reportedFidelity
           : 'unverified';
       return okResult(fidelity, result);
     }
