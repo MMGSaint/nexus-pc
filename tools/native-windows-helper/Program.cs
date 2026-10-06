@@ -135,6 +135,8 @@ internal static class Program
             ThrowLastError("GetSystemCpuSetInformation size query failed");
         }
 
+        if (required > 1024 * 1024)
+            throw new InvalidOperationException("Windows reported an implausibly large CPU Set buffer.");
         var buffer = Marshal.AllocHGlobal(checked((int)required));
         try
         {
@@ -246,9 +248,6 @@ internal static class Program
     {
         if (ids.Length > 256) throw new ArgumentException("A process CPU-set assignment may contain at most 256 IDs.");
         var unique = ids.Distinct().OrderBy(x => x).ToArray();
-        if (unique.Any(id => id == 0))
-            throw new ArgumentException("CPU Set ID 0 is not accepted by the helper.");
-
         using var handle = OpenProcessHandle(pid, ProcessSetLimitedInformation | ProcessQueryLimitedInformation);
         if (!SetProcessDefaultCpuSets(handle.Handle, unique, (uint)unique.Length))
             ThrowLastError("SetProcessDefaultCpuSets failed");
