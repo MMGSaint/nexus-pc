@@ -78,6 +78,7 @@ import { captureWindowsStability, diffWindowsStability } from '../stability/wind
 import { WindowsTelemetrySource } from '../telemetry/sources/windows.js';
 import { mergeSummaries, summarize, summarizePresentMon } from '../telemetry/summary.js';
 import { createProcessEnumerator } from '../process/enumerate.js';
+import { getForegroundProcess } from '../process/windows-native.js';
 import type { ProcessEnumerator } from '../process/enumerate.js';
 import { WorkloadClassifier, signalsFromSnapshot } from '../workload/classifier.js';
 import { ensureToken } from '../vesper/auth.js';
@@ -981,9 +982,20 @@ export class NexusRuntime implements VesperHost {
     if (!enumerated.ok) return null;
 
     const names = Object.values(APPLICATION_HINTS).flat();
+    const foreground = this.platform === 'win32'
+      ? await getForegroundProcess(this.runner).catch(() => null)
+      : null;
+    const foregroundPid = foreground?.ok && foreground.value.available ? foreground.value.pid : null;
+
     const matches = enumerated.value.processes
       .filter((p) => p.pid !== null && names.some((hint) => p.name.toLowerCase().includes(hint)))
-      .sort((a, b) => (b.workingSetBytes ?? -1) - (a.workingSetBytes ?? -1) || (a.pid ?? 0) - (b.pid ?? 0));
+      .sort((a, b) => {
+        const aForeground = foregroundPid !== null && a.pid === foregroundPid ? 1 : 0;
+        const bForeground = foregroundPid !== null && b.pid === foregroundPid ? 1 : 0;
+        return bForeground - aForeground ||
+          (b.workingSetBytes ?? -1) - (a.workingSetBytes ?? -1) ||
+          (a.pid ?? 0) - (b.pid ?? 0);
+      });
 
     const match = matches[0];
     if (!match?.pid || match.pid <= 0) return null;
