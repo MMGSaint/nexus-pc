@@ -11,7 +11,6 @@
 import { readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { Clock } from '../core/clock.js';
 import type { CommandRunner } from '../core/exec.js';
 import type { NexusError } from '../core/errors.js';
 import { err, ok } from '../core/result.js';
@@ -119,13 +118,11 @@ export function parsePresentMonCsv(csv: string): FrameSample[] {
 export class PresentMonCollector {
   private readonly runner: CommandRunner;
   private readonly paths: NexusPaths;
-  private readonly clock: Clock;
   private sequence = 0;
 
-  constructor(input: { runner: CommandRunner; paths: NexusPaths; clock: Clock }) {
+  constructor(input: { runner: CommandRunner; paths: NexusPaths }) {
     this.runner = input.runner;
     this.paths = input.paths;
-    this.clock = input.clock;
   }
 
   async capture(input: PresentMonCaptureRequest): Promise<Result<PresentMonCaptureResult, NexusError>> {
