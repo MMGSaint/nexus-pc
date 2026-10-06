@@ -1,4 +1,5 @@
 import type { ControlId, ControlValue } from '../domain/control.js';
+import type { MeasurementDelta } from '../domain/optimization.js';
 import {
   bootstrapInterval,
   mean,
@@ -137,4 +138,75 @@ export function decideExperiment(
         ? `The candidate cleared the practical threshold and its confidence interval excludes zero (mean ${mean(deltaPercent)?.toFixed(2)}%).`
         : 'The candidate did not clear the practical improvement threshold with a confidence interval that excludes zero.',
   };
+}
+
+
+export const PRIVATE_X3D_TUNER_CONTROLS = Object.freeze([
+  'power.processor.epp',
+  'power.processor.boost_mode',
+] as const);
+
+export interface ExperimentTrialSummary {
+  readonly candidateId: string;
+  readonly candidate: Readonly<Record<string, ControlValue>>;
+  readonly repetitions: number;
+  readonly deltaPercent: readonly number[];
+  readonly decision: ExperimentDecision;
+  readonly stabilityRegression: boolean;
+  readonly outcomeIds: readonly string[];
+}
+
+export interface ExperimentRunResult {
+  readonly status: 'kept' | 'inconclusive' | 'blocked' | 'failed';
+  readonly applicationId: string;
+  readonly fingerprint: ExperimentFingerprint | null;
+  readonly candidates: readonly ExperimentCandidate[];
+  readonly trials: readonly ExperimentTrialSummary[];
+  readonly winner: ExperimentCandidate | null;
+  readonly scoreMetric: string;
+  readonly score: BootstrapInterval & { readonly keep: boolean };
+  readonly finalOutcomeId: string | null;
+  readonly detail: string;
+}
+
+export function defaultPrivateX3dDimensions(
+  current: ReadonlyMap<ControlId, ControlValue | null>,
+): readonly ExperimentDimension[] {
+  const epp = current.get('power.processor.epp');
+  const boost = current.get('power.processor.boost_mode');
+
+  const eppCandidates = [...new Set([
+    20,
+    50,
+    80,
+    ...(typeof epp === 'number' && Number.isInteger(epp) ? [epp] : []),
+  ])].filter((value) => value >= 20 && value <= 100);
+
+  const boostCandidates = [...new Set([
+    2,
+    3,
+    ...(typeof boost === 'number' && Number.isInteger(boost) ? [boost] : []),
+  ])].filter((value) => value >= 0 && value <= 4);
+
+  return Object.freeze([
+    { control: 'power.processor.epp', candidates: eppCandidates },
+    { control: 'power.processor.boost_mode', candidates: boostCandidates },
+  ]);
+}
+
+export function frameScorePercent(
+  measurements: readonly MeasurementDelta[],
+): { readonly metric: string; readonly deltaPercent: number } | null {
+  const preferred = ['frame.1pct_low', 'frame.fps', 'frame.time.p95', 'frame.time'];
+  for (const metric of preferred) {
+    const finding = measurements.find((m) => m.metric === metric);
+    if (!finding || finding.before === null || finding.after === null || finding.before <= 0) continue;
+    const betterWhenLower = metric === 'frame.time.p95' || metric === 'frame.time';
+    const raw = ((finding.after - finding.before) / finding.before) * 100;
+    return {
+      metric,
+      deltaPercent: betterWhenLower ? -raw : raw,
+    };
+  }
+  return null;
 }
