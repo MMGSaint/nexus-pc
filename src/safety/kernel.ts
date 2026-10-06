@@ -34,7 +34,7 @@ import type {
 import type { TelemetrySnapshot } from '../domain/telemetry.js';
 import { isKnown } from '../domain/telemetry.js';
 import { getControl } from './controls.js';
-import type { SafetyPolicy } from './policy.js';
+import { TRANSACTIONAL_EXPERIMENT_CONTROLS, type SafetyPolicy } from './policy.js';
 import { policyDigest } from './policy.js';
 import { scanForAuthorityClaims } from './guards.js';
 
@@ -58,6 +58,8 @@ export interface SafetyContext {
    * recorded so the resulting outcome can never be reported as live.
    */
   readonly actuatorFidelity: (control: ControlId) => Fidelity;
+  /** Internal-only: temporary power-plan experiment trials may bypass control cooldowns. */
+  readonly transactionalExperiment?: boolean;
 }
 
 const RUN_STATES_PERMITTING_WRITES: ReadonlySet<RunState> = new Set<RunState>(['ready', 'degraded']);
@@ -411,10 +413,18 @@ export class SafetyKernel {
 
     /* ------------------------------------------------------------ cooldown */
 
+    const transactional = context.transactionalExperiment === true;
+    if (transactional && !TRANSACTIONAL_EXPERIMENT_CONTROLS.has(control)) {
+      block(
+        'EXPERIMENT_CONTROL_NOT_ALLOWED',
+        `\"${descriptor.name}\" is not an approved temporary experiment control.`,
+      );
+    }
+
     const lastApplied = context.recentApplications
       .filter((r) => r.control === control)
       .reduce<number | null>((acc, r) => (acc === null || r.appliedAtMs > acc ? r.appliedAtMs : acc), null);
-    if (lastApplied !== null && context.nowMs - lastApplied < policy.cooldownMs) {
+    if (!transactional && lastApplied !== null && context.nowMs - lastApplied < policy.cooldownMs) {
       const waitMs = policy.cooldownMs - (context.nowMs - lastApplied);
       block(
         'COOLDOWN',
