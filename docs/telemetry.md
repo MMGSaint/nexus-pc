@@ -80,12 +80,14 @@ from paths that need a ring-0 driver or a vendor library:
   library, which ships *inside the AMD display driver* and has no command-line,
   WMI or IPC surface — it must be reached from native code.
 
-NEXUS embeds none of them. Instead it defines a bridge: an optional,
-separately installed helper writes a small JSON document into the NEXUS runtime
-directory, and NEXUS reads it.
+NEXUS embeds none of them. The merged WARDEN stack uses LibreHardwareMonitor's
+separately running local web endpoint as the first sensor bridge. NEXUS reads the
+endpoint through a loopback-only, schema/range/freshness-validated HTTP boundary;
+it does not copy the monitoring library or driver into the NEXUS process.
 
 ```jsonc
-// %LOCALAPPDATA%\NEXUS\runtime\sensors.json
+// Example payload shape from the external sensor bridge
+
 {
   "version": 1,
   "producer": "my-sensor-helper",
