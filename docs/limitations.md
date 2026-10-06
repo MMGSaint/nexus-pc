@@ -6,9 +6,10 @@ tradeoffs and rough edges that are not simply "not built yet".
 
 ## Nothing has run on the target machine
 
-Everything was developed and tested on Linux. The Windows provider, the Windows
-telemetry source, the persistent PowerShell host and the `powercfg` adapters
-have never executed against real Windows. They are written, typechecked and
+Everything was developed and tested on Linux. The Windows provider, Windows telemetry source,
+persistent PowerShell host, power adapters, LibreHardwareMonitor bridge, PresentMon capture,
+OpenXR probe, driver identity probe, and process/foreground probes have not yet been exercised
+on the target Windows machine. They are written, typechecked and
 unit tested against scripted inputs — which catches parsing bugs, not
 assumptions about what Windows actually returns.
 
@@ -61,19 +62,21 @@ cannot yet prefer the focused window over a background game.
 NEXUS intentionally does not modify AMD Adrenalin's per-game profiles or driver
 settings. The NEXUS application-profile feature only selects among explicit NEXUS
 profiles from observed process-name heuristics. A driver update or vendor-side
-preset change can alter game behaviour without any NEXUS setting changing, so
-measurements taken before and after a driver change should be treated as separate
-baselines.
+preset change can alter game behaviour without any NEXUS setting changing. NEXUS now stamps the
+observed display-driver version into baselines and invalidates an older baseline when a live
+driver change is detected, so pre/post-driver measurements are kept separate.
 
-## Measurement is coarse
+## Measurement has boundaries
 
-Before/after comparison uses mean values over short windows with conservative
-noise floors. It can detect a thermal regression or a large utilisation shift.
-It **cannot** measure frame times, 1% lows, frame pacing, input latency or
-stutter — the things that actually matter for the user's gaming workloads.
+NEXUS now has first-class PresentMon frame evidence: displayed/presented/application FPS,
+frame-type awareness, frame-time percentiles, generated-frame fraction, AFMF observations,
+and display-latency evidence. Benefit decisions can reject changes that improve headline FPS
+while worsening dropped frames or display latency.
 
-So "no measurable benefit" from NEXUS means *NEXUS could not measure a benefit*,
-not that none exists. The wording in the outcome summary is deliberate.
+It still does not measure end-to-end input latency or prove every compositor/driver interaction.
+PresentMon remains an external evidence source, and its accuracy depends on the Windows graphics
+path and installed version. "No measurable benefit" still means NEXUS could not establish a
+benefit with the evidence available, not that none exists.
 
 ## Simulation cannot exercise the apply path end to end
 
