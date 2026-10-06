@@ -5,7 +5,7 @@ import { validateReading } from '../../../src/telemetry/validation.js';
 
 const payload = { Text: 'Computer', Type: 'Root', Children: [
   { Text: 'AMD Ryzen', Type: 'Hardware', Children: [{ Text: 'CPU Package', Type: 'Temperature', Value: '64.5 °C', SensorId: '/0/temperature/0' }] },
-  { Text: 'Radeon Graphics', Type: 'Hardware', Children: [{ Text: 'GPU Core', Type: 'Temperature', Value: '71.0 °C', SensorId: '/1/temperature/0' }, { Text: 'Hot Spot', Type: 'Temperature', Value: '86.0 °C', SensorId: '/1/temperature/1' }] },
+  { Text: 'Radeon Graphics', Type: 'Hardware', Children: [{ Text: 'GPU Core', Type: 'Temperature', Value: '71.0 °C', SensorId: '/1/temperature/0' }, { Text: 'Hot Spot', Type: 'Temperature', Value: '86.0 °C', SensorId: '/1/temperature/1' }, { Text: 'Memory Used', Type: 'Data', Value: '8.2 GB', SensorId: '/1/data/0' }] },
 ] };
 
 test('LHM payload validation rejects malformed trees', () => {
@@ -19,6 +19,7 @@ test('LHM source stays on loopback and parses sensor values', async () => {
   const readings = await source.sample({ clock: { now: () => 1000 } as never, logger: {} as never, timeoutMs: 1000 });
   assert.equal(readings.find((r) => r.metric === 'cpu.temperature')?.value, 64.5);
   assert.equal(readings.find((r) => r.metric === 'gpu.hotspot')?.value, 86);
+  assert.equal(readings.find((r) => r.metric === 'gpu.vram.used')?.value, 8.2 * 1024 ** 3);
 });
 
 test('LHM endpoint rejects non-loopback before network access', async () => {
