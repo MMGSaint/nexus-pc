@@ -56,6 +56,15 @@ presenting them as facts.
 Foreground detection is still absent (`isForeground` is always null), so NEXUS
 cannot yet prefer the focused window over a background game.
 
+## AMD driver and per-game profile ownership
+
+NEXUS intentionally does not modify AMD Adrenalin's per-game profiles or driver
+settings. The NEXUS application-profile feature only selects among explicit NEXUS
+profiles from observed process-name heuristics. A driver update or vendor-side
+preset change can alter game behaviour without any NEXUS setting changing, so
+measurements taken before and after a driver change should be treated as separate
+baselines.
+
 ## Measurement is coarse
 
 Before/after comparison uses mean values over short windows with conservative
