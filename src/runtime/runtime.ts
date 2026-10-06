@@ -85,6 +85,7 @@ import { WindowsTelemetrySource } from '../telemetry/sources/windows.js';
 import { mergeSummaries, summarize, summarizePresentMon } from '../telemetry/summary.js';
 import { createProcessEnumerator } from '../process/enumerate.js';
 import { getForegroundProcess } from '../process/windows-native.js';
+import type { NativeWindowsHelperOptions } from '../process/windows-native.js';
 import type { ProcessEnumerator } from '../process/enumerate.js';
 import { WorkloadClassifier, signalsFromSnapshot } from '../workload/classifier.js';
 import { decideExperiment, defaultPrivateX3dDimensions, fingerprintExperiment, makeCandidateGrid, frameScorePercent, type ExperimentRunResult, type ExperimentTrialSummary } from '../optimizer/experiment-plan.js';
@@ -105,6 +106,14 @@ import { StageTracker } from './stages.js';
  * rate limit. Matches the kernel's own window.
  */
 const RATE_LIMIT_WINDOW_MS = 3_600_000;
+
+function nativeHelperOptions(config: NexusConfig): NativeWindowsHelperOptions | undefined {
+  if (config.tools.nativeHelperPath === null && config.tools.nativeHelperSha256 === null) return undefined;
+  return {
+    ...(config.tools.nativeHelperPath === null ? {} : { executable: config.tools.nativeHelperPath }),
+    ...(config.tools.nativeHelperSha256 === null ? {} : { expectedSha256: config.tools.nativeHelperSha256 }),
+  };
+}
 
 export interface RuntimeOptions {
   readonly paths: NexusPaths;
@@ -190,6 +199,7 @@ export class NexusRuntime implements VesperHost {
       platform: this.platform,
       runner: this.runner,
       clock: this.clock,
+      nativeHelperOptions: nativeHelperOptions(options.config),
     });
     this.sessionId = this.ids.next('sess');
 
@@ -1061,16 +1071,7 @@ export class NexusRuntime implements VesperHost {
     const foreground = this.platform === 'win32'
       ? await getForegroundProcess(
           this.runner,
-          this.options.config.tools.nativeHelperPath === null
-            ? (this.options.config.tools.nativeHelperSha256 === null
-                ? undefined
-                : { expectedSha256: this.options.config.tools.nativeHelperSha256 })
-            : {
-                executable: this.options.config.tools.nativeHelperPath,
-                ...(this.options.config.tools.nativeHelperSha256 === null
-                  ? {}
-                  : { expectedSha256: this.options.config.tools.nativeHelperSha256 }),
-              },
+          nativeHelperOptions(this.options.config),
         ).catch(() => null)
       : null;
     const foregroundPid = foreground?.ok && foreground.value.available ? foreground.value.pid : null;
@@ -1156,19 +1157,8 @@ export class NexusRuntime implements VesperHost {
     if (this.platform !== 'win32') {
       return { available: false, platform: this.platform, detail: 'Windows topology evidence is not currently available on this platform.' };
     }
-    const helperOptions =
-      this.options.config.tools.nativeHelperPath === null
-        ? (this.options.config.tools.nativeHelperSha256 === null
-            ? undefined
-            : { expectedSha256: this.options.config.tools.nativeHelperSha256 })
-        : {
-            executable: this.options.config.tools.nativeHelperPath,
-            ...(this.options.config.tools.nativeHelperSha256 === null
-              ? {}
-              : { expectedSha256: this.options.config.tools.nativeHelperSha256 }),
-          };
     const native = await import('../process/windows-native.js').then((module) =>
-      module.getSystemCpuSets(this.runner, helperOptions),
+      module.getSystemCpuSets(this.runner, nativeHelperOptions(this.options.config)),
     );
     if (!native.ok) {
       return { available: false, platform: this.platform, detail: native.error.message, fidelity: 'unavailable' };
@@ -1269,7 +1259,7 @@ export class NexusRuntime implements VesperHost {
     // Require the target game to be the current foreground application. This stops
     // a background Steam process from triggering a long sequence of power changes.
     const target = await this.resolveFrameTarget(applicationId);
-    const foreground = await getForegroundProcess(this.runner).catch(() => null);
+    const foreground = await getForegroundProcess(this.runner, nativeHelperOptions(this.options.config)).catch(() => null);
     if (!target || !foreground?.ok || foreground.value.pid !== target.processId) {
       return {
         status: 'blocked',
