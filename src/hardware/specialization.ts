@@ -10,8 +10,8 @@
  * request still goes through the normal safety kernel.
  */
 
-import type { HardwareInventory } from './domain/hardware.js';
-import type { ProfileDocument } from './domain/profile.js';
+import type { HardwareInventory } from '../domain/hardware.js';
+import type { ProfileDocument } from '../domain/profile.js';
 
 export interface TargetSpecialization {
   readonly id: string;
