@@ -15,9 +15,9 @@ export interface DriverObservation {
 }
 
 export type DriverReconciliation =
-  | { readonly state: 'unchanged'; readonly reason: string }
-  | { readonly state: 'changed'; readonly reason: string; readonly recoverable: boolean }
-  | { readonly state: 'unknown'; readonly reason: string };
+  | { readonly state: 'unchanged'; readonly reason: string; readonly needsNewBaseline: false }
+  | { readonly state: 'changed'; readonly reason: string; readonly recoverable: boolean; readonly needsNewBaseline: true }
+  | { readonly state: 'unknown'; readonly reason: string; readonly needsNewBaseline: false };
 
 export function reconcileDriver(
   knownGood: DriverKnownGoodState | null,
@@ -27,23 +27,27 @@ export function reconcileDriver(
     return {
       state: 'unknown',
       reason: 'No known-good driver state has been recorded.',
+      needsNewBaseline: false,
     };
   }
   if (observed.source !== 'live' || !observed.driverVersion) {
     return {
       state: 'unknown',
       reason: 'Live driver identity is unavailable; no restoration is attempted.',
+      needsNewBaseline: false,
     };
   }
   if (observed.driverVersion === knownGood.driverVersion) {
     return {
       state: 'unchanged',
       reason: `Driver ${observed.driverVersion} matches the known-good state.`,
+      needsNewBaseline: false,
     };
   }
   return {
     state: 'changed',
     reason: `Driver changed from ${knownGood.driverVersion} to ${observed.driverVersion}; per-game and display/VR state should be reconciled before claiming configuration is restored.`,
     recoverable: true,
+    needsNewBaseline: true,
   };
 }

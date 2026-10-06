@@ -133,6 +133,12 @@ export const NOISE_FLOOR: Readonly<Partial<Record<MetricId, number>>> = Object.f
   'frame.time.p95': 0.25,
   'frame.time.p99': 0.5,
   'frame.time.stddev': 0.25,
+  'frame.displayed_fps': 1,
+  'frame.presented_fps': 1,
+  'frame.application_fps': 1,
+  'frame.generated_fraction': 0.02,
+  'frame.afmf_generated': 1,
+  'frame.display_latency.p95': 1,
   'frame.dropped': 1,
 });
 
@@ -180,6 +186,12 @@ export function summarizePresentMon(
   add('frame.time.p95', summary.p95FrameTimeMs);
   add('frame.time.p99', summary.p99FrameTimeMs);
   add('frame.time.stddev', summary.frameTimeStdDevMs);
+  add('frame.displayed_fps', summary.displayedFps);
+  add('frame.presented_fps', summary.presentedFps);
+  add('frame.application_fps', summary.applicationFps);
+  add('frame.generated_fraction', summary.generatedFrameFraction);
+  add('frame.afmf_generated', summary.afmfFrameCount, null, summary.sampleCount > 0 ? 1 : 0);
+  add('frame.display_latency.p95', summary.displayLatencyP95Ms);
   add('frame.dropped', summary.droppedFrames, null, summary.droppedFramesKnown ? summary.sampleCount : 0);
 
   return {

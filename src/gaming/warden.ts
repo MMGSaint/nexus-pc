@@ -1,4 +1,6 @@
 import type { WorkloadClass } from '../domain/workload.js';
+import type { FrameTruth, FrameBenefitResult } from '../performance/frame-truth.js';
+import { requireFrameBenefit } from '../performance/frame-truth.js';
 
 export type SettingValue = string | number | boolean | null;
 
@@ -26,6 +28,8 @@ export interface ObservedGameState {
   readonly gameVersion: string | null;
   readonly observedAtMs: number;
   readonly source: 'live' | 'unavailable' | 'mocked';
+  /** Optional frame-truth evidence used when deciding whether a profile change helped. */
+  readonly frameTruth?: FrameTruth;
 }
 
 export interface DriftItem {
@@ -49,6 +53,13 @@ export interface WardenReconciliation {
   readonly drift: readonly DriftItem[];
   readonly pendingRestart: boolean;
   readonly summary: string;
+}
+
+export function frameBenefit(before: FrameTruth | undefined, after: FrameTruth | undefined): FrameBenefitResult {
+  if (!before || !after) {
+    return { decision: 'insufficient_evidence', scorePercent: null, reason: 'WARDEN has no frame-truth A/B evidence.' };
+  }
+  return requireFrameBenefit(before, after);
 }
 
 /** Compare explicit desired state with observed state. Unknown is never treated as equal. */
@@ -114,11 +125,14 @@ export function selectGameProfile(
   profiles: readonly GameProfile[],
   executableName: string,
   workload?: WorkloadClass,
+  vrActive?: boolean,
 ): GameProfile | undefined {
   const normalized = executableName.trim().toLowerCase();
-  const candidates = profiles.filter((profile) =>
+  let candidates = profiles.filter((profile) =>
     profile.executableNames.some((name) => name.trim().toLowerCase() === normalized),
   );
+  if (vrActive === true) candidates = candidates.filter((profile) => profile.vr === true);
+  if (vrActive === false) candidates = candidates.filter((profile) => profile.vr !== true);
   if (workload) {
     return candidates.find((profile) => profile.workloads.includes(workload)) ?? candidates[0];
   }

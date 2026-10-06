@@ -14,11 +14,12 @@ import { selectPrimaryGpuFromInventory } from '../hardware/primary-gpu.js';
 import type { MetricId, TelemetrySnapshot } from '../domain/telemetry.js';
 import { isKnown } from '../domain/telemetry.js';
 import type { ActuatorContext } from '../optimizer/actuator.js';
+import type { CommandRunner } from '../core/exec.js';
+import { readOpenXrRuntime } from '../vr/openxr.js';
 import type { ActuatorRegistry } from '../optimizer/actuator.js';
 import { getControl } from '../safety/controls.js';
 import type { ProcessEnumerator } from '../process/enumerate.js';
 import { probeProcessEnumeration } from '../process/enumerate.js';
-import { getForegroundProcess, getSystemCpuSets, getProcessDefaultCpuSets } from '../process/windows-native.js';
 import type { CapabilityProbe, ProbeOutcome } from './registry.js';
 
 function descriptor(
@@ -51,6 +52,7 @@ export interface ProbeSources {
   readonly vesperListening: boolean;
   /** Live process enumerator; probed rather than assumed from code existence. */
   readonly processEnumerator: ProcessEnumerator;
+  readonly runner: CommandRunner;
 }
 
 /** Telemetry capabilities and the metric each one depends on. */
@@ -277,82 +279,42 @@ export function buildCapabilityProbes(sources: () => ProbeSources): CapabilityPr
 
   probes.push({
     descriptor: descriptor(
-      'process.foreground',
-      'Foreground process detection',
-      'Read the process ID and executable name of the current Windows foreground window.',
-      { backend: 'nexus-native-helper', hardwareDependent: true },
+      'frame.presentmon.capture',
+      'PresentMon frame capture',
+      'Collect frame-delivery evidence through the installed PresentMon collector.',
+      { backend: 'PresentMon', hardwareDependent: true },
     ),
     trust: 'live',
     probe: async (): Promise<ProbeOutcome> => {
       const { runner, platform } = sources();
-      if (platform !== 'win32') return { state: 'unsupported', detail: 'foreground window detection is currently Windows-only' };
-      const result = await getForegroundProcess(runner);
+      if (platform !== 'win32') return { state: 'unsupported', detail: 'PresentMon capture is currently Windows-only' };
+      const result = await runner.run({
+        file: 'PresentMon.exe',
+        args: ['--version'],
+        timeoutMs: 5_000,
+        maxOutputBytes: 64 * 1024,
+      });
       if (!result.ok) return { state: 'unavailable', detail: result.error.message };
-      return result.value.available && result.value.pid !== null
-        ? { state: 'available', fidelity: 'live', detail: `foreground PID ${result.value.pid} (${result.value.processName ?? 'unknown process'})` }
-        : { state: 'unavailable', detail: 'Windows reported no usable foreground process' };
+      if (result.value.code !== 0) return { state: 'unavailable', detail: result.value.stderr.trim() || 'PresentMon did not report a usable version' };
+      return { state: 'available', fidelity: 'live', backendVersion: result.value.stdout.trim().split(/\s+/).pop(), detail: 'PresentMon executable responded successfully' };
     },
   });
 
   probes.push({
     descriptor: descriptor(
-      'cpu.topology',
-      'Windows CPU Set topology',
-      'Enumerate CPU Set IDs, core/LLC relationships, processor groups, NUMA nodes and scheduling flags.',
-      { backend: 'nexus-native-helper', hardwareDependent: true },
+      'vr.openxr.runtime',
+      'OpenXR active runtime',
+      'Read-only discovery of the Windows OpenXR active runtime manifest.',
+      { backend: 'openxr.loader', hardwareDependent: true },
     ),
     trust: 'live',
     probe: async (): Promise<ProbeOutcome> => {
-      const { runner, platform } = sources();
-      if (platform !== 'win32') return { state: 'unsupported', detail: 'CPU Set topology is currently Windows-only' };
-      const result = await getSystemCpuSets(runner);
+      if (sources().platform !== 'win32') return { state: 'unsupported', detail: 'Windows OpenXR runtime discovery is currently implemented only on Windows' };
+      const result = await readOpenXrRuntime(sources().runner);
       if (!result.ok) return { state: 'unavailable', detail: result.error.message };
-      return result.value.length > 0
-        ? { state: 'available', fidelity: 'live', detail: `${result.value.length} CPU Set(s) enumerated` }
-        : { state: 'unavailable', detail: 'Windows returned no CPU Sets' };
-    },
-  });
-
-  probes.push({
-    descriptor: descriptor(
-      'process.cpuset.read',
-      'Process CPU Set assignments',
-      'Read a process default CPU Set assignment without changing it.',
-      { backend: 'nexus-native-helper', hardwareDependent: true },
-    ),
-    trust: 'live',
-    probe: async (): Promise<ProbeOutcome> => {
-      const { runner, platform } = sources();
-      if (platform !== 'win32') return { state: 'unsupported', detail: 'CPU Set process assignments are currently Windows-only' };
-      const result = await getProcessDefaultCpuSets(runner, process.pid);
-      return result.ok
-        ? { state: 'available', fidelity: 'live', detail: `read CPU-set defaults for NEXUS PID ${process.pid}` }
-        : { state: 'unavailable', detail: result.error.message };
-    },
-  });
-
-  probes.push({
-    descriptor: descriptor(
-      'process.cpuset.write',
-      'Process CPU Set assignment',
-      'Set and verify a process default CPU Set list. This is capability plumbing only; policy and target selection remain outside this probe.',
-      {
-        backend: 'nexus-native-helper',
-        access: 'write',
-        safetyClass: 'reversible',
-        reversibility: 'reversible',
-        requiresElevation: true,
-      },
-    ),
-    trust: 'live',
-    probe: async (): Promise<ProbeOutcome> => {
-      const { runner, platform } = sources();
-      if (platform !== 'win32') return { state: 'unsupported', detail: 'CPU Set process assignment is currently Windows-only' };
-      const topology = await getSystemCpuSets(runner);
-      if (!topology.ok) return { state: 'unavailable', detail: topology.error.message };
-      return topology.value.length > 0
-        ? { state: 'unverified', fidelity: 'live', detail: 'native helper is present and the API topology is readable; NEXUS has not mutated a real process during capability probing' }
-        : { state: 'unavailable', detail: 'no CPU Sets are available' };
+      if (!result.value.active) return { state: 'unavailable', detail: 'no active OpenXR runtime is registered' };
+      if (!result.value.manifestExists) return { state: 'unavailable', detail: 'the registered OpenXR manifest path does not exist' };
+      return { state: 'available', fidelity: 'live', detail: result.value.name ? 'active runtime: ' + result.value.name : 'an active OpenXR runtime manifest is registered' };
     },
   });
 

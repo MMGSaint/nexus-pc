@@ -28,3 +28,25 @@ test('VR evaluates compositor budget before suggesting changes', () => {
   assert.ok(result.reasons.some((reason) => reason.includes('headroom')));
   assert.equal(result.proposed[0]?.key, 'capture.enabled');
 });
+
+
+test('VR policy refuses to act when required instrumentation is unavailable', () => {
+  const gated: VrProfile = {
+    ...profile,
+    requiredCapabilities: ['openxr.runtime', 'frame.compositor'],
+  };
+  const result = evaluateVr(gated, {
+    active: true,
+    runtime: 'OpenXR',
+    headset: 'Example HMD',
+    refreshHz: 90,
+    compositorFrameTimeMs: 10,
+    appFrameTimeMs: 10,
+    gpuUtilizationPct: 70,
+    gpuTemperatureC: 70,
+    source: 'live',
+    capabilities: { 'openxr.runtime': true, 'frame.compositor': false },
+  });
+  assert.equal(result.supported, false);
+  assert.deepEqual(result.proposed, []);
+});
