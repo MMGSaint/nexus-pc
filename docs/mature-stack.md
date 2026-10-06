@@ -10,6 +10,12 @@ The private NEXUS build intentionally composes mature projects where platform pl
 | Process topology ideas | ProcGovernor (CC0) | design reference for affinity/CPU-set concepts | NEXUS safety kernel |
 | Audio UX reference | EarTrumpet (MIT with excluded entities noted in upstream license) | architecture/UX reference; no source vendoring in this pass | Vesper permission layer |
 
+## Mature implementation notes
+
+The additional review looked at mature desktop tools for patterns rather than copying source. Playnite reinforces explicit game/application identity and launch/session concepts. FanControl reinforces keeping the UI/orchestrator layer separate from hardware backends. MangoHud reinforces detailed frame-time/latency visualization rather than trusting headline FPS. Special K reinforces treating VRR/frame-pacing and latency interactions as first-class evidence. NEXUS already follows the useful parts of those patterns without importing their code or expanding its runtime dependency footprint.
+
+These references are advisory only. The authority remains the NEXUS capability registry, fidelity model, safety kernel, checkpoint/rollback path and audit trail.
+
 ## Private-machine policy
 
 Third-party tools are replaceable adapters, not hidden authorities. A missing external component yields an unavailable/unverified capability; NEXUS never pretends a missing sensor or timing source is zero.
