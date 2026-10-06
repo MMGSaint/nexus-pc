@@ -1525,6 +1525,7 @@ export class NexusRuntime implements VesperHost {
         baselineAvailable: this.baseline !== null,
         recentApplications: this.appliedHistory,
         actuatorFidelity: (control) => this.registry.fidelityOf(control),
+        ...(request.transactionalExperiment === undefined ? {} : { transactionalExperiment: request.transactionalExperiment }),
       });
       const outcome: OptimizationOutcome = {
         id: this.ids.next('opt'),
@@ -1568,7 +1569,7 @@ export class NexusRuntime implements VesperHost {
 
     const beforeSystemSummary = summarize(this.telemetry.history(60_000));
     const frameTarget = workload.workload === 'gaming' || workload.workload === 'gpu_bound'
-      ? await this.resolveFrameTarget()
+      ? await this.resolveFrameTarget(request.applicationId)
       : null;
     const beforeFrame = frameTarget && this.platform === 'win32'
       ? await this.presentMon.capture({ processId: frameTarget.processId, seconds: 10 }).catch(() => null)
@@ -1682,7 +1683,7 @@ export class NexusRuntime implements VesperHost {
     // Stability is an oracle, not a guess: only a successful before/after Event Log
     // observation may trigger the automatic safety response. Missing Event Log access
     // never counts as "zero incidents".
-    if (outcome.status === 'applied_kept' && outcome.checkpointId && stabilityBefore?.ok) {
+    if (!request.transactionalExperiment && outcome.status === 'applied_kept' && outcome.checkpointId && stabilityBefore?.ok) {
       const after = await captureWindowsStability(this.runner, stabilityBefore.value.capturedAtMs, this.clock.now()).catch(() => null);
       if (after?.ok) {
         const delta = diffWindowsStability(stabilityBefore.value, after.value);
