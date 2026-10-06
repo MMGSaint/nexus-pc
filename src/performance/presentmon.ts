@@ -117,11 +117,15 @@ export function parsePresentMonCsv(csv: string): FrameSample[] {
 export class PresentMonCollector {
   private readonly runner: CommandRunner;
   private readonly paths: NexusPaths;
+  private readonly executablePath: string | null;
+  private readonly executableSha256: string | null;
   private sequence = 0;
 
-  constructor(input: { runner: CommandRunner; paths: NexusPaths }) {
+  constructor(input: { runner: CommandRunner; paths: NexusPaths; executablePath?: string | null; executableSha256?: string | null }) {
     this.runner = input.runner;
     this.paths = input.paths;
+    this.executablePath = input.executablePath ?? null;
+    this.executableSha256 = input.executableSha256 ?? null;
   }
 
   async capture(input: PresentMonCaptureRequest): Promise<Result<PresentMonCaptureResult, NexusError>> {
@@ -135,11 +139,18 @@ export class PresentMonCollector {
     if (input.processName && !/^[A-Za-z0-9_. -]{1,128}$/.test(input.processName)) {
       return err(nexusError('E_INVALID_INPUT', 'PresentMon processName contains unsupported characters.'));
     }
+    if (!this.executablePath || !this.executableSha256) {
+      return err(nexusError('E_UNAVAILABLE', 'PresentMon is not configured with an absolute executable path and SHA-256 trust pin.'));
+    }
 
     await ensureDir(this.paths.runtime);
     const csvPath = input.outputFile
       ? path.resolve(input.outputFile)
       : path.join(this.paths.runtime, `presentmon-${this.sequence++}.csv`);
+    const relativeOutput = path.relative(path.resolve(this.paths.runtime), csvPath);
+    if (relativeOutput.startsWith('..') || path.isAbsolute(relativeOutput)) {
+      return err(nexusError('E_INVALID_INPUT', 'PresentMon evidence output must remain inside the NEXUS runtime directory.'));
+    }
 
     // For safety, default output stays under NEXUS runtime. A caller-supplied
     // file must still be an absolute path and must remain outside no trust boundary
@@ -157,7 +168,9 @@ export class PresentMonCollector {
     ];
 
     const started = await this.runner.run({
-      file: 'PresentMon.exe',
+      file: this.executablePath,
+      requireAbsolutePath: true,
+      expectedSha256: this.executableSha256,
       args,
       timeoutMs: (seconds + 15) * 1000,
       maxOutputBytes: 256 * 1024,
