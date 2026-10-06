@@ -143,9 +143,21 @@ export class WindowsPowerPlanSandbox {
         args: ['/changename', workspace.sandboxGuid, name, 'NEXUS measured plan'],
         timeoutMs: this.timeoutMs,
       });
-      if (!renamed.ok) return err(renamed.error);
-      if (renamed.value.code !== 0) {
-        return err(nexusError('E_IO', `powercfg could not name the kept plan: ${renamed.value.stderr.trim() || `exit ${renamed.value.code}`}`));
+      const renameError = !renamed.ok
+        ? renamed.error
+        : renamed.value.code !== 0
+          ? nexusError('E_IO', `powercfg could not name the kept plan: ${renamed.value.stderr.trim() || `exit ${renamed.value.code}`}`)
+          : null;
+      if (renameError) {
+        const restored = await this.restore(workspace);
+        if (!restored.ok) {
+          return err(nexusError(
+            'E_VERIFY_FAILED',
+            `Could not finish naming the kept plan and could not restore the original state: ${restored.error.message}`,
+            { primaryError: renameError.message, restoreError: restored.error.message },
+          ));
+        }
+        return err(renameError);
       }
     }
     const persisted = await this.persist({ ...workspace, mode: 'kept' });
@@ -153,7 +165,14 @@ export class WindowsPowerPlanSandbox {
       // A kept clone that cannot be durably recorded is unsafe to leave active:
       // crash recovery would still believe this is a temporary transaction and
       // could delete the user's intended winner. Restore the original instead.
-      await this.restore(workspace);
+      const restored = await this.restore(workspace);
+      if (!restored.ok) {
+        return err(nexusError(
+          'E_VERIFY_FAILED',
+          `The kept plan could not be durably recorded, and restoring the original state also failed: ${restored.error.message}`,
+          { primaryError: persisted.error.message, restoreError: restored.error.message },
+        ));
+      }
       return persisted;
     }
     return ok(true);
