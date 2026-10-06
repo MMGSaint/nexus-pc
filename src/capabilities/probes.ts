@@ -140,7 +140,7 @@ const CONTROL_CAPABILITIES: readonly { id: CapabilityId; controls: readonly stri
   { id: 'power.scheme.write', controls: ['power.scheme.active'], write: true, name: 'Change the active power scheme' },
   {
     id: 'power.setting.read',
-    controls: ['power.processor.min_state', 'power.processor.max_state'],
+    controls: ['power.processor.epp', 'power.processor.min_state', 'power.processor.max_state'],
     write: false,
     name: 'Read power scheme settings',
   },
