@@ -109,7 +109,7 @@ export function frameTruthReadings(truth: FrameTruth): readonly Reading[] {
     confidence: truth.fidelity === 'live' ? 1 : 0.5,
   } as const;
 
-  const values: Array<readonly ['frame.time' | 'frame.fps' | 'frame.1pct_low' | 'frame.0_1pct_low' | 'frame.time.p95' | 'frame.time.p99' | 'frame.time.stddev' | 'frame.displayed_fps' | 'frame.presented_fps' | 'frame.application_fps' | 'frame.generated_fraction' | 'frame.afmf_generated' | 'frame.display_latency.p95' | 'frame.dropped', number]> = [
+  const values: Array<readonly ['frame.time' | 'frame.fps' | 'frame.1pct_low' | 'frame.0_1pct_low' | 'frame.time.p95' | 'frame.time.p99' | 'frame.time.stddev' | 'frame.displayed_fps' | 'frame.presented_fps' | 'frame.application_fps' | 'frame.generated_fraction' | 'frame.afmf_generated' | 'frame.display_latency.p95' | 'frame.dropped', number | null]> = [
     ['frame.time', s.averageFrameTimeMs],
     ['frame.fps', s.fps],
     ['frame.1pct_low', s.fps1PercentLow],
@@ -125,7 +125,9 @@ export function frameTruthReadings(truth: FrameTruth): readonly Reading[] {
     ['frame.display_latency.p95', s.displayLatencyP95Ms],
     ['frame.dropped', s.droppedFrames],
   ];
-  return values
-    .filter(([, value]) => value !== null && Number.isFinite(value))
-    .map(([metric, value]) => reading({ ...common, metric, value }));
+  return values.flatMap(([metric, value]) =>
+    value !== null && Number.isFinite(value)
+      ? [reading({ ...common, metric, value })]
+      : [],
+  );
 }
