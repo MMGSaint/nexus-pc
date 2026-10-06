@@ -762,6 +762,7 @@ export class NexusRuntime implements VesperHost {
         name: loaded.profile.name,
         description: loaded.profile.description,
         targets: loaded.profile.targets,
+        ...(loaded.profile.applicationIds === undefined ? {} : { applicationIds: loaded.profile.applicationIds }),
         settings: loaded.profile.settings.map((s) => ({
           control: s.control,
           value: s.value,
@@ -989,7 +990,7 @@ export class NexusRuntime implements VesperHost {
 
     const chosen = request.profileId
       ? this.profiles.get(request.profileId)
-      : this.profiles.suggestFor(workload.workload);
+      : this.profiles.suggestFor(workload.workload, workload.detectedApplicationIds ?? []);
     if (!chosen) {
       return this.engine.noAction(
         'no_proposal_generated',
