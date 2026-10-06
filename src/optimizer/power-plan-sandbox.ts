@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 /**
  * Power-plan transaction workspace.
  *
