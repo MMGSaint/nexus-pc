@@ -1606,6 +1606,26 @@ export class NexusRuntime implements VesperHost {
           },
           onMeasurementWindow: (windowMs) => this.telemetry.enterOptimizationMode(windowMs),
           ...(request.rollbackPolicy === undefined ? {} : { rollbackPolicy: request.rollbackPolicy }),
+          ...(request.transactionalExperiment === undefined ? {} : { transactionalExperiment: request.transactionalExperiment }),
+          ...(request.transactionalExperiment === true && stabilityBefore?.ok
+            ? {
+                stabilityCheck: async () => {
+                  const after = await captureWindowsStability(
+                    this.runner,
+                    stabilityBefore.value.capturedAtMs,
+                    this.clock.now(),
+                  ).catch(() => null);
+                  if (!after?.ok) return null;
+                  const delta = diffWindowsStability(stabilityBefore.value, after.value);
+                  return {
+                    unstable: delta.unstable,
+                    detail: delta.unstable
+                      ? `new WHEA/TDR/application-crash evidence: WHEA ${delta.whea}, TDR ${delta.displayTdr}, app crashes ${delta.appCrashes}`
+                      : 'stability oracle observed no new WHEA/TDR/application-crash events while the candidate was active',
+                  };
+                },
+              }
+            : {}),
         },
         this.actuatorContext,
       );
@@ -1626,7 +1646,7 @@ export class NexusRuntime implements VesperHost {
 
     if (powerWorkspace) {
       if (outcome.status === 'applied_kept') {
-        const named = await this.powerSandbox.keep(powerWorkspace, `NEXUS ${workload.workload}`);
+        const named = await this.powerSandbox.keep(powerWorkspace, request.sandboxPowerPlanName ?? `NEXUS ${workload.workload}`);
         if (!named.ok) {
           this.degrade(`Power-plan sandboxed experiment was kept but could not be named: ${named.error.message}`);
         }
@@ -1722,7 +1742,7 @@ export class NexusRuntime implements VesperHost {
 
     this.outcomes.set(outcome.id, outcome);
     for (const change of outcome.appliedChanges) {
-      this.appliedHistory.push({ control: change.control, appliedAtMs: change.appliedAtMs });
+      if (!request.transactionalExperiment) this.appliedHistory.push({ control: change.control, appliedAtMs: change.appliedAtMs });
     }
     this.pruneAppliedHistory();
     if (outcome.status === 'applied_kept') {
