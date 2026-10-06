@@ -60,7 +60,7 @@ nexus run                       # resident background process
 ```
 
 Add `--json` to any command. Add `--simulate target-desktop` to run against a
-fixture modelling a Ryzen 9 9950X / RX 7900 XT / 96 GB machine — everything
+fixture modelling a Ryzen 9 9950X3D / RX 7900 XT / 96 GB machine — everything
 produced that way is labelled `mocked`.
 
 ## Documentation
@@ -95,3 +95,7 @@ the machine is available.
 Continuous integration runs the local verify gate on pushes and PRs targeting main.
 
 The next milestone is first real PC initialization.
+
+## Private primary-target specialization
+
+While this repository remains private, NEXUS is intentionally optimized around the primary desktop target: Ryzen 9 9950X3D, Radeon RX 7900 XT (20 GB), and 96 GB DDR5. The safety kernel remains generic, but automatic strategy may be machine-specific. On the X3D target, NEXUS defers generic whole-package core-parking and processor-floor changes until live sensors, frame-time measurement, and CCD-aware scheduling exist. An explicit user-selected profile still goes through the normal safety kernel.
