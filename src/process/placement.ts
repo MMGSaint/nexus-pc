@@ -43,7 +43,8 @@ export class WindowsProcessPlacementController {
 
     const candidates = (options.includeParked ? topology.value : safeCpuSets(topology.value))
       .filter((set) => set.lastLevelCacheIndex === cacheDomain)
-      .filter((set) => options.requireAllUnallocated === false || !set.allocated);
+      .filter((set) => options.requireAllUnallocated === false || !set.allocated)
+      .filter((set) => !set.realTime);
 
     const unique = [...new Set(candidates.map((set) => set.id))].sort((a, b) => a - b);
     if (unique.length === 0) {
