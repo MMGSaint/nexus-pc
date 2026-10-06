@@ -69,14 +69,6 @@ const WINDOWS_SYSTEM_EXECUTABLES = new Set([
   'tasklist',
 ]);
 
-function trustedWindowsSystemPath(file: string): string | null {
-  if (process.platform !== 'win32') return null;
-  const basename = path.basename(file).toLowerCase().replace(/\.exe$/, '');
-  if (!WINDOWS_SYSTEM_EXECUTABLES.has(basename)) return null;
-  const root = process.env.SystemRoot ?? 'C:\\Windows';
-  return path.join(root, 'System32', `${basename}.exe`);
-}
-
 export interface CommandRequest {
   readonly file: string;
   readonly args: readonly string[];
