@@ -53,6 +53,7 @@ export const VESPER_METHODS = {
   declareContext: 'context',
   recommend: 'recommend',
   optimize: 'optimize',
+  runExperiment: 'optimize',
   rollback: 'rollback',
   getOptimizationResult: 'status',
   getDecisionEvidence: 'status',
@@ -99,6 +100,9 @@ export const requestSchema = vObject({
         note: vOptional(vString({ maxLength: 512 })),
         ttlMs: vOptional(vNumber({ integer: true, min: 1_000, max: 3_600_000 })),
         dryRun: vOptional(vBoolean()),
+        repetitions: vOptional(vNumber({ integer: true, min: 2, max: 4 })),
+        maxCandidates: vOptional(vNumber({ integer: true, min: 2, max: 8 })),
+        practicalThresholdPercent: vOptional(vNumber({ min: 0.1, max: 10 })),
         controls: vOptional(
           vArray(
             vObject({
@@ -134,6 +138,9 @@ export interface VesperParams {
   readonly note?: string | undefined;
   readonly ttlMs?: number | undefined;
   readonly dryRun?: boolean | undefined;
+  readonly repetitions?: number | undefined;
+  readonly maxCandidates?: number | undefined;
+  readonly practicalThresholdPercent?: number | undefined;
   readonly controls?: readonly { readonly control: string; readonly value: string | number | boolean }[] | undefined;
 }
 
