@@ -453,6 +453,10 @@ export class OptimizationEngine {
     environment.onMeasurementWindow?.(windowMs);
     await this.wait(windowMs);
     const afterSummary = await environment.measureAfter(windowMs);
+    // The outcome must carry the weakest provenance across the write and both
+    // measurement windows; a live actuator measured against mocked/unavailable
+    // post-change telemetry is not a live performance result.
+    const outcomeFidelity = combineFidelity(fidelity, afterSummary.fidelity);
     const measurements = compare(environment.beforeSummary, afterSummary);
     const stability = environment.stabilityCheck ? await environment.stabilityCheck() : null;
 
