@@ -63,7 +63,7 @@ import type { ExecutionEnvironment } from '../optimizer/engine.js';
 import { OperationJournal } from '../optimizer/journal.js';
 import { ProfileStore, applicability } from '../profiles/store.js';
 import { SafetyKernel } from '../safety/kernel.js';
-import { BASE_POLICY, narrowPolicy } from '../safety/policy.js';
+import { BASE_POLICY, narrowPolicy, TRANSACTIONAL_EXPERIMENT_CONTROLS } from '../safety/policy.js';
 import { writableControls } from '../safety/controls.js';
 import { TelemetryPipeline } from '../telemetry/pipeline.js';
 import { LinuxTelemetrySource } from '../telemetry/sources/linux.js';
@@ -83,6 +83,8 @@ import { createProcessEnumerator } from '../process/enumerate.js';
 import { getForegroundProcess } from '../process/windows-native.js';
 import type { ProcessEnumerator } from '../process/enumerate.js';
 import { WorkloadClassifier, signalsFromSnapshot } from '../workload/classifier.js';
+import { decideExperiment, fingerprintExperiment, makeCandidateGrid, type ExperimentCandidate } from '../optimizer/experiment-plan.js';
+import { ExperimentStore, type ExperimentRecord } from '../optimizer/experiment-store.js';
 import { ensureToken } from '../vesper/auth.js';
 import type { ProfileView, RecommendationView, VesperHost } from '../vesper/handlers.js';
 import { VesperServer } from '../vesper/server.js';
@@ -144,6 +146,7 @@ export class NexusRuntime implements VesperHost {
   /** Mature frame collector; PresentMon owns ETW, NEXUS owns interpretation. */
   private readonly presentMon: PresentMonCollector;
   private readonly powerSandbox: WindowsPowerPlanSandbox;
+  private readonly experimentStore: ExperimentStore;
   private vesper: VesperServer | null = null;
 
   private startedAtMs = 0;
@@ -172,6 +175,7 @@ export class NexusRuntime implements VesperHost {
     this.platform = options.platform ?? process.platform;
     this.presentMon = new PresentMonCollector({ runner: this.runner, paths: options.paths });
     this.powerSandbox = new WindowsPowerPlanSandbox(this.runner, 15_000, options.paths);
+    this.experimentStore = new ExperimentStore(options.paths, this.clock, this.logger);
     this.processEnumerator = createProcessEnumerator({
       platform: this.platform,
       runner: this.runner,
@@ -1115,6 +1119,14 @@ export class NexusRuntime implements VesperHost {
     rollbackPolicy?: ExecutionEnvironment['rollbackPolicy'];
     /** Experimental: run power-setting experiments on a duplicated plan. */
     sandboxPowerPlan?: boolean;
+    /** Optional target application for frame evidence. */
+    applicationId?: string;
+    /** Internal experiment candidate; only the dedicated tuner should set this. */
+    experimentCandidate?: Readonly<Record<ControlId, ControlValue>>;
+    /** Marks a temporary trial; never exposed directly over Vesper IPC. */
+    transactionalExperiment?: boolean;
+    /** Human-readable name for a kept sandbox plan. */
+    sandboxPowerPlanName?: string;
   }): Promise<OptimizationOutcome> {
     const workload = await this.analyzeWorkload();
 
@@ -1152,50 +1164,110 @@ export class NexusRuntime implements VesperHost {
       );
     }
 
-    const chosen = request.profileId
-      ? this.profiles.get(request.profileId)
-      : this.profiles.suggestFor(workload.workload, workload.detectedApplicationIds ?? []);
-    if (!chosen) {
+    if (request.transactionalExperiment && !request.sandboxPowerPlan) {
       return this.engine.noAction(
-        'no_proposal_generated',
-        request.profileId
-          ? `There is no profile named "${request.profileId}".`
-          : `No profile targets a ${workload.workload} workload.`,
+        'unsafe',
+        'Temporary tuner trials must run inside an isolated duplicated power plan.',
         workload,
       );
     }
 
-    if (request.profileId === undefined) {
-      const guard = automaticProfileGuard(chosen.profile, specializeTarget(this.inventory));
-      if (guard !== null) {
-        return this.engine.noAction('no_proposal_generated', guard, workload);
-      }
+    if (request.experimentCandidate && request.profileId !== undefined) {
+      return this.engine.noAction(
+        'no_proposal_generated',
+        'A tuner candidate cannot be combined with a named profile.',
+        workload,
+      );
     }
+
+    let chosen = request.profileId
+      ? this.profiles.get(request.profileId)
+      : this.profiles.suggestFor(workload.workload, workload.detectedApplicationIds ?? []);
 
     const current = await this.currentControlValues();
-    const proposed = this.engine.propose({
-      workload,
-      profile: chosen.profile,
-      currentValues: current,
-      origin: request.origin,
-      requestedBy: request.requestedBy,
-    });
+    let proposal: OptimizationProposal;
 
-    if (proposed.kind === 'no_action') {
-      return this.engine.noAction(proposed.reason, proposed.summary, workload);
+    if (request.experimentCandidate) {
+      const entries = Object.entries(request.experimentCandidate);
+      if (entries.length === 0) {
+        return this.engine.noAction('no_proposal_generated', 'The tuner candidate contained no controls.', workload);
+      }
+
+      const invalid = entries.filter(([control]) => !TRANSACTIONAL_EXPERIMENT_CONTROLS.has(control));
+      if (invalid.length > 0) {
+        return this.engine.noAction(
+          'unsafe',
+          `The tuner can only exercise: ${[...TRANSACTIONAL_EXPERIMENT_CONTROLS].join(', ')}.`,
+          workload,
+        );
+      }
+
+      const changes = entries
+        .filter(([control, value]) => !structurallyEqual(current.get(control) ?? null, value))
+        .map(([control, targetValue]) => ({
+          control,
+          targetValue,
+          rationale: 'Bounded private per-game experiment candidate.',
+          expectedEffect: 'Measure frame-time and system evidence under this temporary power policy.',
+        }));
+
+      if (changes.length === 0) {
+        return this.engine.noAction('already_optimal', 'This tuner candidate already matches the current control state.', workload);
+      }
+
+      proposal = {
+        id: this.ids.next('prop'),
+        createdAtMs: this.clock.now(),
+        origin: request.origin,
+        requestedBy: request.requestedBy,
+        workload: workload.workload,
+        changes,
+        profileId: 'experiment',
+        notes: 'private per-game tuner candidate; always rollback unless explicitly selected as the final winner',
+      };
+      chosen = undefined;
+    } else {
+      if (!chosen) {
+        return this.engine.noAction(
+          'no_proposal_generated',
+          request.profileId
+            ? `There is no profile named "${request.profileId}".`
+            : `No profile targets a ${workload.workload} workload.`,
+          workload,
+        );
+      }
+
+      if (request.profileId === undefined) {
+        const guard = automaticProfileGuard(chosen.profile, specializeTarget(this.inventory));
+        if (guard !== null) {
+          return this.engine.noAction('no_proposal_generated', guard, workload);
+        }
+      }
+
+      const proposed = this.engine.propose({
+        workload,
+        profile: chosen.profile,
+        currentValues: current,
+        origin: request.origin,
+        requestedBy: request.requestedBy,
+      });
+
+      if (proposed.kind === 'no_action') {
+        return this.engine.noAction(proposed.reason, proposed.summary, workload);
+      }
+
+      proposal =
+        request.confirmControls && request.origin === 'user'
+          ? {
+              ...proposed.proposal,
+              confirmation: {
+                confirmedAtMs: this.clock.now(),
+                controls: request.confirmControls,
+                acknowledgement: 'confirmed at the NEXUS command line',
+              },
+            }
+          : proposed.proposal;
     }
-
-    const proposal =
-      request.confirmControls && request.origin === 'user'
-        ? {
-            ...proposed.proposal,
-            confirmation: {
-              confirmedAtMs: this.clock.now(),
-              controls: request.confirmControls,
-              acknowledgement: 'confirmed at the NEXUS command line',
-            },
-          }
-        : proposed.proposal;
 
     if (request.dryRun) {
       const verdict = this.kernel.evaluate(proposal, {
@@ -1206,6 +1278,7 @@ export class NexusRuntime implements VesperHost {
         baselineAvailable: this.baseline !== null,
         recentApplications: this.appliedHistory,
         actuatorFidelity: (control) => this.registry.fidelityOf(control),
+        ...(request.transactionalExperiment === undefined ? {} : { transactionalExperiment: request.transactionalExperiment }),
       });
       const outcome: OptimizationOutcome = {
         id: this.ids.next('opt'),
@@ -1249,7 +1322,7 @@ export class NexusRuntime implements VesperHost {
 
     const beforeSystemSummary = summarize(this.telemetry.history(60_000));
     const frameTarget = workload.workload === 'gaming' || workload.workload === 'gpu_bound'
-      ? await this.resolveFrameTarget()
+      ? await this.resolveFrameTarget(request.applicationId)
       : null;
     const beforeFrame = frameTarget && this.platform === 'win32'
       ? await this.presentMon.capture({ processId: frameTarget.processId, seconds: 10 }).catch(() => null)
@@ -1287,6 +1360,7 @@ export class NexusRuntime implements VesperHost {
           },
           onMeasurementWindow: (windowMs) => this.telemetry.enterOptimizationMode(windowMs),
           ...(request.rollbackPolicy === undefined ? {} : { rollbackPolicy: request.rollbackPolicy }),
+          ...(request.transactionalExperiment === undefined ? {} : { transactionalExperiment: request.transactionalExperiment }),
         },
         this.actuatorContext,
       );
@@ -1307,7 +1381,7 @@ export class NexusRuntime implements VesperHost {
 
     if (powerWorkspace) {
       if (outcome.status === 'applied_kept') {
-        const named = await this.powerSandbox.keep(powerWorkspace, `NEXUS ${workload.workload}`);
+        const named = await this.powerSandbox.keep(powerWorkspace, request.sandboxPowerPlanName ?? `NEXUS ${workload.workload}`);
         if (!named.ok) {
           this.degrade(`Power-plan sandboxed experiment was kept but could not be named: ${named.error.message}`);
         }
@@ -1370,6 +1444,7 @@ export class NexusRuntime implements VesperHost {
                 ...outcome,
                 status: 'applied_rolled_back',
                 rolledBack: true,
+                stabilityRegression: true,
                 finishedAtMs: this.clock.now(),
                 summary: `${outcome.summary} NEXUS automatically rolled the change back after new stability events were detected.`,
               };
@@ -1402,11 +1477,13 @@ export class NexusRuntime implements VesperHost {
     }
 
     this.outcomes.set(outcome.id, outcome);
-    for (const change of outcome.appliedChanges) {
-      this.appliedHistory.push({ control: change.control, appliedAtMs: change.appliedAtMs });
+    if (!request.transactionalExperiment) {
+      for (const change of outcome.appliedChanges) {
+        this.appliedHistory.push({ control: change.control, appliedAtMs: change.appliedAtMs });
+      }
+      this.pruneAppliedHistory();
     }
-    this.pruneAppliedHistory();
-    if (outcome.status === 'applied_kept') {
+    if (outcome.status === 'applied_kept' && chosen) {
       this.activeProfileId = chosen.profile.id;
       this.activeProfileAppliedAtMs = this.clock.now();
       await this.eventLog.append({
