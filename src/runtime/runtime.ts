@@ -1326,6 +1326,22 @@ export class NexusRuntime implements VesperHost {
       if (stabilityRegression || this.runState === 'observation_only') break;
     }
 
+    if (this.runState === 'observation_only') {
+      return {
+        fidelity: experimentFidelity,
+        status: 'inconclusive',
+        applicationId,
+        fingerprint,
+        candidates,
+        trials,
+        winner: null,
+        scoreMetric: 'frame.1pct_low',
+        score: decideExperiment([]).score,
+        finalOutcomeId: null,
+        detail: 'Private tuner aborted after machine-state uncertainty; no winner was selected or re-applied.',
+      };
+    }
+
     const viable = trials
       .filter((trial) => trial.decision.keep && !trial.stabilityRegression)
       .sort((a, b) =>
