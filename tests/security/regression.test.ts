@@ -451,6 +451,27 @@ describe('process execution is confined', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('refuses third-party helpers unless an absolute trusted path is supplied', async () => {
+    const result = await new NodeCommandRunner().run({
+      file: 'presentmon.exe',
+      args: [],
+      requireAbsolutePath: true,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('E_INVALID_INPUT');
+  });
+
+  it('refuses malformed executable trust pins before launch', async () => {
+    const result = await new NodeCommandRunner().run({
+      file: 'C:\\Program Files\\PresentMon\\PresentMon.exe',
+      args: [],
+      requireAbsolutePath: true,
+      expectedSha256: 'not-a-sha256',
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('E_INVALID_INPUT');
+  });
+
   it('never uses a shell', async () => {
     const source = await readFile(path.join(process.cwd(), 'src/core/exec.ts'), 'utf8');
     expect(source).toContain('shell: false');
