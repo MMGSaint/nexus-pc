@@ -50,6 +50,7 @@ import { CheckpointStore } from '../checkpoint/store.js';
 import type { RestoreResult } from '../checkpoint/store.js';
 import type { NexusConfig } from '../config/config.js';
 import { HardwareDiscovery } from '../hardware/discovery.js';
+import { readWindowsDisplayDriver } from '../hardware/driver.js';
 import { automaticProfileGuard, specializeTarget } from '../hardware/specialization.js';
 import { LinuxHardwareProvider } from '../hardware/providers/linux.js';
 import { MockHardwareProvider } from '../hardware/providers/mock.js';
@@ -145,6 +146,7 @@ export class NexusRuntime implements VesperHost {
   private runState: RunState = 'initializing';
   private degradedReasons: string[] = [];
   private inventory: HardwareInventory | null = null;
+  private driverVersion: string | null = null;
   private baseline: Baseline | null = null;
   private activeProfileId: string = OBSERVATION_PROFILE_ID;
   private activeProfileAppliedAtMs: number | null = null;
@@ -440,11 +442,47 @@ export class NexusRuntime implements VesperHost {
     });
 
     await this.stages.run('baseline', async () => {
+      if (this.platform === 'win32' && !this.options.config.simulate.hardwareFixture) {
+        const driver = await readWindowsDisplayDriver(this.runner, this.clock.now()).catch(() => null);
+        if (driver?.ok) {
+          this.driverVersion = driver.value.version;
+          await this.eventLog.append({
+            kind: 'hardware.driver_identified',
+            severity: 'info',
+            message: `display driver identified as ${driver.value.version}`,
+            data: { version: driver.value.version, provider: driver.value.provider, deviceName: driver.value.deviceName },
+          });
+        } else {
+          this.driverVersion = null;
+          await this.eventLog.append({
+            kind: 'hardware.driver_unavailable',
+            severity: 'info',
+            message: 'live display driver identity was unavailable; existing baseline will not be assumed to match a driver version',
+          });
+        }
+      }
+
       const existing = await this.baselines.latest();
-      if (existing.ok) {
+      const driverChanged =
+        existing.ok &&
+        this.driverVersion !== null &&
+        existing.value.driverVersion !== this.driverVersion;
+      if (driverChanged) {
+        this.baseline = null;
+        await this.eventLog.append({
+          kind: 'baseline.invalidated_driver_change',
+          severity: 'warning',
+          message: `baseline ${existing.value.id} was invalidated because the display driver changed`,
+          data: {
+            previousDriverVersion: existing.value.driverVersion ?? null,
+            currentDriverVersion: this.driverVersion,
+          },
+        });
+      } else if (existing.ok) {
         this.baseline = existing.value;
         return `loaded ${existing.value.id}`;
       }
+
       const captured = await this.captureBaseline();
       if (!captured.ok) {
         await this.eventLog.append({
@@ -688,6 +726,7 @@ export class NexusRuntime implements VesperHost {
       snapshots,
       workload: classification,
       context: this.actuatorContext,
+      ...(this.driverVersion === null ? {} : { driverVersion: this.driverVersion }),
     });
     if (!captured.ok) return captured;
     this.baseline = captured.value;
@@ -1362,6 +1401,10 @@ export class NexusRuntime implements VesperHost {
 
   get inventorySnapshot(): HardwareInventory | null {
     return this.inventory;
+  }
+
+  get displayDriverVersion(): string | null {
+    return this.driverVersion;
   }
 
   get actuatorRegistry(): ActuatorRegistry {
