@@ -38,6 +38,7 @@ import type { ProfileDocument } from '../domain/profile.js';
 import { OBSERVATION_PROFILE_ID } from '../domain/profile.js';
 import type { HardwareInventory } from '../domain/hardware.js';
 import type { TelemetrySnapshot, TelemetrySummary } from '../domain/telemetry.js';
+import { APPLICATION_HINTS } from '../domain/workload.js';
 import type { ContextHint, ProcessObservation, WorkloadClassification } from '../domain/workload.js';
 import { hintIsFresh } from '../domain/workload.js';
 
@@ -50,6 +51,7 @@ import { CheckpointStore } from '../checkpoint/store.js';
 import type { RestoreResult } from '../checkpoint/store.js';
 import type { NexusConfig } from '../config/config.js';
 import { HardwareDiscovery } from '../hardware/discovery.js';
+import { readWindowsDisplayDriver } from '../hardware/driver.js';
 import { automaticProfileGuard, specializeTarget } from '../hardware/specialization.js';
 import { LinuxHardwareProvider } from '../hardware/providers/linux.js';
 import { MockHardwareProvider } from '../hardware/providers/mock.js';
