@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { requireFrameBenefit, type FrameTruth } from '../../src/performance/frame-truth.js';
+import { frameTruthReadings, requireFrameBenefit, type FrameTruth } from '../../src/performance/frame-truth.js';
 
 const base = (overrides: Partial<FrameTruth['summary']> = {}): FrameTruth => ({
   capturedAtMs: 1,
@@ -21,4 +21,11 @@ test('frame truth detects dropped-frame regression even with mixed metrics', () 
 test('frame truth refuses to decide without live evidence or enough samples', () => {
   assert.equal(requireFrameBenefit(base({ sampleCount: 10 }), base()).decision, 'insufficient_evidence');
   assert.equal(requireFrameBenefit(base(), { ...base(), fidelity: 'mocked' }).decision, 'insufficient_evidence');
+});
+
+test('frame truth converts directly into typed telemetry readings', () => {
+  const truth = base();
+  const readings = frameTruthReadings(truth);
+  assert.equal(readings.find((r) => r.metric === 'frame.fps')?.value, 100);
+  assert.equal(readings.find((r) => r.metric === 'frame.time.stddev')?.unit, 'millisecond');
 });
