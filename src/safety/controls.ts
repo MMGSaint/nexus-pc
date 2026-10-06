@@ -23,7 +23,7 @@ export const BUILTIN_CONTROLS: readonly ControlDescriptor[] = freezeAll([
     id: 'power.scheme.active',
     name: 'Active Windows power scheme',
     description:
-      "The GUID of the power scheme Windows is currently using. NEXUS edits the active scheme in place and checkpoints the prior value of every setting it changes. Duplicating the user's scheme and editing only the copy would be safer still; see docs/limitations.md.",
+      "The GUID of the power scheme Windows is currently using. Normal control writes are checkpointed and reversible. Experimental optimization can instead use an isolated duplicated scheme through the runtime sandbox, leaving the user's original scheme untouched.",
     domain: 'power',
     valueSpec: { kind: 'opaque', note: 'power scheme GUID, restored verbatim from a checkpoint' },
     access: 'read-write',
