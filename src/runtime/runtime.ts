@@ -38,6 +38,7 @@ import type { ProfileDocument } from '../domain/profile.js';
 import { OBSERVATION_PROFILE_ID } from '../domain/profile.js';
 import type { HardwareInventory } from '../domain/hardware.js';
 import type { TelemetrySnapshot, TelemetrySummary } from '../domain/telemetry.js';
+import { APPLICATION_HINTS } from '../domain/workload.js';
 import type { ContextHint, ProcessObservation, WorkloadClassification } from '../domain/workload.js';
 import { hintIsFresh } from '../domain/workload.js';
 
