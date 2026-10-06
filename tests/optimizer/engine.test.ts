@@ -204,6 +204,39 @@ describe('execute — apply and keep', () => {
     expect(flat.ok && flat.value.summary).toContain('no improvement was measurable');
   });
 
+  it('always rolls back a temporary experiment trial', async () => {
+    harness = await makeHarness();
+    const { min } = registerPowerAdapters(harness.registry);
+    const result = await harness.engine.execute(
+      proposal({ changes: [change('power.processor.min_state', 20)] }),
+      environment({ rollbackPolicy: 'always', transactionalExperiment: true }),
+      harness.actuatorContext,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.status).toBe('applied_rolled_back');
+    expect(result.value.rolledBack).toBe(true);
+    expect(min.current).toBe(5);
+  });
+
+  it('forces rollback when a stability oracle reports a regression', async () => {
+    harness = await makeHarness();
+    const { min } = registerPowerAdapters(harness.registry);
+    const result = await harness.engine.execute(
+      proposal({ changes: [change('power.processor.min_state', 20)] }),
+      environment({
+        stabilityCheck: async () => ({ unstable: true, detail: 'WHEA 1' }),
+      }),
+      harness.actuatorContext,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.status).toBe('applied_rolled_back');
+    expect(result.value.stabilityRegression).toBe(true);
+    expect(result.value.summary).toContain('stability oracle');
+    expect(min.current).toBe(5);
+  });
+
   it('labels the outcome mocked when the actuator is a mock', async () => {
     harness = await makeHarness();
     registerPowerAdapters(harness.registry);
