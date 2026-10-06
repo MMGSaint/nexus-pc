@@ -53,6 +53,23 @@ export const BUILTIN_CONTROLS: readonly ControlDescriptor[] = freezeAll([
     notes: '0 disabled, 1 enabled, 2 aggressive, 3 efficient enabled, 4 efficient aggressive, 5 aggressive at guaranteed, 6 efficient aggressive at guaranteed.',
   },
   {
+    id: 'power.processor.epp',
+    name: 'Processor energy performance preference',
+    description:
+      'Windows Hardware P-states energy/performance preference. Lower values favor performance and higher values favor energy savings. NEXUS treats this as a measured lever rather than assuming a universal best value.',
+    domain: 'power',
+    valueSpec: { kind: 'integer', min: 0, max: 100, unit: 'percent' },
+    access: 'read-write',
+    safetyClass: 'sensitive',
+    reversibility: 'reversible',
+    applyTiming: 'immediate',
+    requiresElevation: true,
+    requiresCapabilities: ['power.setting.read', 'power.setting.write'],
+    evidenceLevel: 'documented',
+    autoProposable: true,
+  },
+
+  {
     id: 'power.processor.min_state',
     name: 'Minimum processor state',
     description: 'Floor on processor performance state, as a percentage.',
