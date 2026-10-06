@@ -255,6 +255,8 @@ describe('capability probe wiring', () => {
         vesperListening: false,
         processEnumerator: enumerator,
         runner,
+        presentMonPath: null,
+        presentMonSha256: null,
       })),
     );
     await registry.probeAll(2_000);
