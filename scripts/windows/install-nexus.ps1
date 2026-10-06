@@ -100,6 +100,18 @@ if ([string]::IsNullOrWhiteSpace($NodePath)) {
     $NodePath = $node.Source
 }
 
+$NodePath = [System.IO.Path]::GetFullPath($NodePath)
+if (-not (Test-Path $NodePath -PathType Leaf)) {
+    throw "NodePath does not resolve to a file: $NodePath"
+}
+
+if ($Elevated) {
+    $programFiles = [System.IO.Path]::GetFullPath($env:ProgramFiles)
+    if (-not $NodePath.StartsWith($programFiles, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Elevated NEXUS startup requires node.exe from a protected Program Files installation. Refusing $NodePath."
+    }
+}
+
 if ($Elevated) {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
