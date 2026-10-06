@@ -126,6 +126,14 @@ export const NOISE_FLOOR: Readonly<Partial<Record<MetricId, number>>> = Object.f
   'cpu.clock': 100,
   'gpu.clock': 50,
   'memory.available': 512 * 1024 * 1024,
+  'frame.time': 0.25,
+  'frame.fps': 1,
+  'frame.1pct_low': 1,
+  'frame.0_1pct_low': 1,
+  'frame.time.p95': 0.25,
+  'frame.time.p99': 0.5,
+  'frame.time.stddev': 0.25,
+  'frame.dropped': 1,
 });
 
 export function isSignificantChange(metric: MetricId, delta: number): boolean {
