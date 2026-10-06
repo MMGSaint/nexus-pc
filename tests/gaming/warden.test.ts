@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import { frameBenefit, reconcileGameProfile, selectGameProfile, stageRestartChanges, type GameProfile } from '../../src/gaming/warden.js';
 
 const profile: GameProfile = { id: 'example', name: 'Example Game', executableNames: ['ExampleGame.exe'], workloads: ['gaming'], version: 1, settings: [
