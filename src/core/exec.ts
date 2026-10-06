@@ -127,6 +127,15 @@ export function isAllowedExecutable(file: string): boolean {
   return ALLOWED.has(executableBasename(file));
 }
 
+/** Resolve a bare allowlisted Windows system tool without consulting PATH. */
+export function resolveTrustedSystemExecutable(file: string): string | null {
+  if (process.platform !== 'win32') return null;
+  const basename = executableBasename(file);
+  if (!WINDOWS_SYSTEM_EXECUTABLES.has(basename)) return null;
+  const root = process.env.SystemRoot ?? 'C:\\Windows';
+  return path.join(root, 'System32', `${basename}.exe`);
+}
+
 export class NodeCommandRunner implements CommandRunner {
   async run(request: CommandRequest): Promise<Result<CommandResult, NexusError>> {
     const launch = await resolveExecutablePath(request);
@@ -232,7 +241,7 @@ async function resolveExecutablePath(request: CommandRequest): Promise<Result<st
   }
 
   if (!absolute && process.platform === 'win32') {
-    const systemPath = trustedWindowsSystemPath(request.file);
+    const systemPath = resolveTrustedSystemExecutable(request.file);
     if (systemPath) return ok(systemPath);
     // Third-party / helper binaries must never be allowed to fall through to PATH.
     if (isAllowedExecutable(request.file)) {
