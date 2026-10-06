@@ -39,6 +39,28 @@ import {
   text,
 } from './format.js';
 
+const KNOWN_COMMANDS = new Set([
+  'doctor',
+  'health',
+  'discover',
+  'topology',
+  'observe',
+  'baseline',
+  'profiles',
+  'controls',
+  'recommend',
+  'optimize',
+  'checkpoints',
+  'rollback',
+  'audit',
+  'vesper',
+  'config',
+  'first-pc',
+  'run',
+  'version',
+  'help',
+]);
+
 const USAGE = `NEXUS ${NEXUS_VERSION} — PC performance and hardware specialist
 
 Usage: nexus <command> [options]
@@ -84,6 +106,11 @@ async function main(argv: readonly string[]): Promise<number> {
     const payload = { nexus: NEXUS_VERSION, vesperContract: VESPER_CONTRACT_VERSION, node: process.version };
     process.stdout.write(flagBoolean(args, 'json') ? `${JSON.stringify(payload)}\n` : `NEXUS ${NEXUS_VERSION} (Vesper contract ${VESPER_CONTRACT_VERSION}, Node ${process.version})\n`);
     return 0;
+  }
+
+  if (args.command !== null && !KNOWN_COMMANDS.has(args.command)) {
+    process.stderr.write(`Unknown command "${args.command}".\n\n${USAGE}`);
+    return 2;
   }
 
   const home = flagString(args, 'home') ?? defaultHome();
