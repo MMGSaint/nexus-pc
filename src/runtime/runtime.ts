@@ -75,7 +75,7 @@ import { probeCoreinfoTopology } from '../hardware/coreinfo-topology.js';
 import { PresentMonCollector } from '../performance/presentmon.js';
 import { captureWindowsStability, diffWindowsStability } from '../stability/windows-event-oracle.js';
 import { WindowsTelemetrySource } from '../telemetry/sources/windows.js';
-import { summarize } from '../telemetry/summary.js';
+import { mergeSummaries, summarize, summarizePresentMon } from '../telemetry/summary.js';
 import { createProcessEnumerator } from '../process/enumerate.js';
 import type { ProcessEnumerator } from '../process/enumerate.js';
 import { WorkloadClassifier, signalsFromSnapshot } from '../workload/classifier.js';
@@ -968,6 +968,25 @@ export class NexusRuntime implements VesperHost {
 
   /* ------------------------------------------------------------ optimize */
 
+  /**
+   * Resolve a concrete game process for PresentMon. This is intentionally
+   * heuristic: process enumeration corroborates the workload, while the
+   * resulting PID is only used to collect frame evidence for this experiment.
+   */
+  private async resolveFrameTarget(): Promise<{ processId: number; processName: string } | null> {
+    const enumerated = await this.processEnumerator.enumerate({ maxProcesses: 256 });
+    if (!enumerated.ok) return null;
+
+    const names = Object.values(APPLICATION_HINTS).flat();
+    const matches = enumerated.value.processes
+      .filter((p) => p.pid !== null && names.some((hint) => p.name.toLowerCase().includes(hint)))
+      .sort((a, b) => (b.workingSetBytes ?? -1) - (a.workingSetBytes ?? -1) || (a.pid ?? 0) - (b.pid ?? 0));
+
+    const match = matches[0];
+    if (!match?.pid || match.pid <= 0) return null;
+    return { processId: match.pid, processName: match.name };
+  }
+
   async runOptimization(request: {
     origin: 'user' | 'vesper' | 'internal';
     requestedBy: string;
@@ -1091,7 +1110,16 @@ export class NexusRuntime implements VesperHost {
       return outcome;
     }
 
-    const beforeSummary = summarize(this.telemetry.history(60_000));
+    const beforeSystemSummary = summarize(this.telemetry.history(60_000));
+    const frameTarget = workload.workload === 'gaming' || workload.workload === 'gpu_bound'
+      ? await this.resolveFrameTarget()
+      : null;
+    const beforeFrame = frameTarget && this.platform === 'win32'
+      ? await this.presentMon.capture({ processId: frameTarget.processId, seconds: 10 }).catch(() => null)
+      : null;
+    const beforeSummary = beforeFrame?.ok
+      ? mergeSummaries(beforeSystemSummary, summarizePresentMon(beforeFrame.value.summary, this.clock.now()))
+      : beforeSystemSummary;
     const stabilityBefore =
       this.platform === 'win32'
         ? await captureWindowsStability(this.runner, this.clock.now() - 5 * 60_000, this.clock.now()).catch(() => null)
@@ -1109,7 +1137,17 @@ export class NexusRuntime implements VesperHost {
           recentApplications: this.appliedHistory,
           workload,
           beforeSummary,
-          measureAfter: async (windowMs) => summarize(this.telemetry.history(windowMs)),
+          measureAfter: async (windowMs) => {
+            const systemSummary = summarize(this.telemetry.history(windowMs));
+            if (!frameTarget || this.platform !== 'win32') return systemSummary;
+            const captured = await this.presentMon.capture({
+              processId: frameTarget.processId,
+              seconds: Math.max(5, Math.min(120, Math.ceil(windowMs / 1000))),
+            });
+            return captured.ok
+              ? mergeSummaries(systemSummary, summarizePresentMon(captured.value.summary, this.clock.now()))
+              : systemSummary;
+          },
           onMeasurementWindow: (windowMs) => this.telemetry.enterOptimizationMode(windowMs),
           ...(request.rollbackPolicy === undefined ? {} : { rollbackPolicy: request.rollbackPolicy }),
         },
