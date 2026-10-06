@@ -10,6 +10,7 @@
 import type { Fidelity } from '../core/fidelity.js';
 import type { CapabilityDescriptor, CapabilityId } from '../domain/capability.js';
 import type { HardwareInventory } from '../domain/hardware.js';
+import { selectPrimaryGpuFromInventory } from '../hardware/primary-gpu.js';
 import type { MetricId, TelemetrySnapshot } from '../domain/telemetry.js';
 import { isKnown } from '../domain/telemetry.js';
 import type { ActuatorContext } from '../optimizer/actuator.js';
@@ -182,7 +183,7 @@ export function buildCapabilityProbes(sources: () => ProbeSources): CapabilityPr
       probe: async (): Promise<ProbeOutcome> => {
         const { inventory } = sources();
         if (!inventory) return { state: 'unavailable', detail: 'no inventory' };
-        const value = field === 'cpu' ? inventory.cpu.model : inventory.gpus[0]?.model;
+        const value = field === 'cpu' ? inventory.cpu.model : selectPrimaryGpuFromInventory(inventory)?.model;
         if (!value) return { state: 'unavailable', detail: 'discovery could not identify this component' };
         return {
           state: inventory.fidelity === 'live' ? 'available' : 'mocked',
