@@ -144,6 +144,7 @@ export class WorkloadClassifier {
     );
     const gameProcess = gameCandidates[0]?.name ?? null;
     const foregroundGameProcess = gameCandidates.find((process) => process.isForeground === true)?.name ?? null;
+    const anyForegroundObserved = signals.processes.some((process) => process.isForeground === true);
 
     const detectedApplicationIds = Object.entries(APPLICATION_HINTS)
       .filter(([, hints]) => hints.some((hint) => names.some((name) => name.includes(hint))))
@@ -158,7 +159,9 @@ export class WorkloadClassifier {
           ? 0.35
           : foregroundGameProcess
             ? 0.65
-            : 0.25;
+            : anyForegroundObserved
+              ? 0.25
+              : 0.4;
       add(
         'gaming',
         weight,
