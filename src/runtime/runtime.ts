@@ -70,8 +70,12 @@ import { MockTelemetrySource, SIMULATED_IDLE } from '../telemetry/sources/mock.j
 import { OsMemorySource } from '../telemetry/sources/os-memory.js';
 import { SelfTelemetrySource } from '../telemetry/sources/self.js';
 import { SensorBridgeSource } from '../telemetry/sources/sensor-bridge.js';
+import { LibreHardwareMonitorSource } from '../telemetry/sources/libre-hardware-monitor.js';
+import { probeCoreinfoTopology } from '../hardware/coreinfo-topology.js';
+import { PresentMonCollector } from '../performance/presentmon.js';
+import { captureWindowsStability, diffWindowsStability } from '../stability/windows-event-oracle.js';
 import { WindowsTelemetrySource } from '../telemetry/sources/windows.js';
-import { summarize } from '../telemetry/summary.js';
+import { mergeSummaries, summarize, summarizePresentMon } from '../telemetry/summary.js';
 import { createProcessEnumerator } from '../process/enumerate.js';
 import type { ProcessEnumerator } from '../process/enumerate.js';
 import { WorkloadClassifier, signalsFromSnapshot } from '../workload/classifier.js';
@@ -133,6 +137,8 @@ export class NexusRuntime implements VesperHost {
   private readonly baselines: BaselineStore;
   private readonly profiles: ProfileStore;
   private readonly engine: OptimizationEngine;
+  /** Mature frame collector; PresentMon owns ETW, NEXUS owns interpretation. */
+  private readonly presentMon: PresentMonCollector;
   private vesper: VesperServer | null = null;
 
   private startedAtMs = 0;
@@ -159,6 +165,7 @@ export class NexusRuntime implements VesperHost {
     this.ids = options.ids ?? systemIds;
     this.runner = options.runner ?? new NodeCommandRunner();
     this.platform = options.platform ?? process.platform;
+    this.presentMon = new PresentMonCollector({ runner: this.runner, paths: options.paths });
     this.processEnumerator = createProcessEnumerator({
       platform: this.platform,
       runner: this.runner,
@@ -497,6 +504,9 @@ export class NexusRuntime implements VesperHost {
       this.telemetry.register(new MockTelemetrySource(SIMULATED_IDLE));
     } else if (this.platform === 'win32') {
       this.telemetry.register(new WindowsTelemetrySource({ clock: this.clock, logger: this.logger }));
+      // Prefer a mature hardware monitor when it is running; the existing file bridge
+      // remains available for installations that use a custom native helper instead.
+      this.telemetry.register(new LibreHardwareMonitorSource({ clock: this.clock, logger: this.logger }));
     } else if (this.platform === 'linux') {
       this.telemetry.register(new LinuxTelemetrySource());
     }
@@ -958,6 +968,25 @@ export class NexusRuntime implements VesperHost {
 
   /* ------------------------------------------------------------ optimize */
 
+  /**
+   * Resolve a concrete game process for PresentMon. This is intentionally
+   * heuristic: process enumeration corroborates the workload, while the
+   * resulting PID is only used to collect frame evidence for this experiment.
+   */
+  private async resolveFrameTarget(): Promise<{ processId: number; processName: string } | null> {
+    const enumerated = await this.processEnumerator.enumerate({ maxProcesses: 256 });
+    if (!enumerated.ok) return null;
+
+    const names = Object.values(APPLICATION_HINTS).flat();
+    const matches = enumerated.value.processes
+      .filter((p) => p.pid !== null && names.some((hint) => p.name.toLowerCase().includes(hint)))
+      .sort((a, b) => (b.workingSetBytes ?? -1) - (a.workingSetBytes ?? -1) || (a.pid ?? 0) - (b.pid ?? 0));
+
+    const match = matches[0];
+    if (!match?.pid || match.pid <= 0) return null;
+    return { processId: match.pid, processName: match.name };
+  }
+
   async runOptimization(request: {
     origin: 'user' | 'vesper' | 'internal';
     requestedBy: string;
@@ -1081,7 +1110,20 @@ export class NexusRuntime implements VesperHost {
       return outcome;
     }
 
-    const beforeSummary = summarize(this.telemetry.history(60_000));
+    const beforeSystemSummary = summarize(this.telemetry.history(60_000));
+    const frameTarget = workload.workload === 'gaming' || workload.workload === 'gpu_bound'
+      ? await this.resolveFrameTarget()
+      : null;
+    const beforeFrame = frameTarget && this.platform === 'win32'
+      ? await this.presentMon.capture({ processId: frameTarget.processId, seconds: 10 }).catch(() => null)
+      : null;
+    const beforeSummary = beforeFrame?.ok
+      ? mergeSummaries(beforeSystemSummary, summarizePresentMon(beforeFrame.value.summary, this.clock.now()))
+      : beforeSystemSummary;
+    const stabilityBefore =
+      this.platform === 'win32'
+        ? await captureWindowsStability(this.runner, this.clock.now() - 5 * 60_000, this.clock.now()).catch(() => null)
+        : null;
     this.optimizationInFlight = true;
     let executed;
     try {
@@ -1095,7 +1137,17 @@ export class NexusRuntime implements VesperHost {
           recentApplications: this.appliedHistory,
           workload,
           beforeSummary,
-          measureAfter: async (windowMs) => summarize(this.telemetry.history(windowMs)),
+          measureAfter: async (windowMs) => {
+            const systemSummary = summarize(this.telemetry.history(windowMs));
+            if (!frameTarget || this.platform !== 'win32') return systemSummary;
+            const captured = await this.presentMon.capture({
+              processId: frameTarget.processId,
+              seconds: Math.max(5, Math.min(120, Math.ceil(windowMs / 1000))),
+            });
+            return captured.ok
+              ? mergeSummaries(systemSummary, summarizePresentMon(captured.value.summary, this.clock.now()))
+              : systemSummary;
+          },
           onMeasurementWindow: (windowMs) => this.telemetry.enterOptimizationMode(windowMs),
           ...(request.rollbackPolicy === undefined ? {} : { rollbackPolicy: request.rollbackPolicy }),
         },
@@ -1110,7 +1162,69 @@ export class NexusRuntime implements VesperHost {
       return this.engine.noAction('unsafe', executed.error.message, workload);
     }
 
-    const outcome = executed.value;
+    let outcome = executed.value;
+
+    // Stability is an oracle, not a guess: only a successful before/after Event Log
+    // observation may trigger the automatic safety response. Missing Event Log access
+    // never counts as "zero incidents".
+    if (outcome.status === 'applied_kept' && outcome.checkpointId && stabilityBefore?.ok) {
+      const after = await captureWindowsStability(this.runner, stabilityBefore.value.capturedAtMs, this.clock.now()).catch(() => null);
+      if (after?.ok) {
+        const delta = diffWindowsStability(stabilityBefore.value, after.value);
+        await this.eventLog.append({
+          kind: 'stability.observed',
+          severity: delta.unstable ? 'error' : 'info',
+          message: delta.unstable
+            ? `post-optimization stability regression detected (WHEA ${delta.whea}, TDR ${delta.displayTdr}, app crashes ${delta.appCrashes})`
+            : 'post-optimization stability check found no new WHEA/TDR/application crash events',
+          data: {
+            whea: delta.whea,
+            displayTdr: delta.displayTdr,
+            appCrashes: delta.appCrashes,
+            werEvents: delta.werEvents,
+            totalErrors: delta.totalErrors,
+            unstable: delta.unstable,
+          },
+        });
+        if (delta.unstable) {
+          try {
+            const restored = await this.performRollback(outcome.checkpointId, 'internal', 'nexus.stability-oracle');
+            if (restored.complete) {
+              outcome = {
+                ...outcome,
+                status: 'applied_rolled_back',
+                rolledBack: true,
+                finishedAtMs: this.clock.now(),
+                summary: `${outcome.summary} NEXUS automatically rolled the change back after new stability events were detected.`,
+              };
+              this.degrade('The stability oracle detected a post-change WHEA/TDR/application crash and rolled the change back.');
+              this.runState = 'observation_only';
+            } else {
+              outcome = {
+                ...outcome,
+                status: 'applied_unverified',
+                rolledBack: false,
+                finishedAtMs: this.clock.now(),
+                summary: `${outcome.summary} Stability regression was detected, but rollback was incomplete; NEXUS is observation-only.`,
+              };
+              this.degrade('Stability regression detected and rollback was incomplete.');
+              this.runState = 'observation_only';
+            }
+          } catch (error) {
+            this.degrade(`Stability regression detected but automatic rollback was refused: ${error instanceof Error ? error.message : String(error)}`);
+            this.runState = 'observation_only';
+            outcome = {
+              ...outcome,
+              status: 'applied_unverified',
+              rolledBack: false,
+              finishedAtMs: this.clock.now(),
+              summary: `${outcome.summary} Stability regression was detected but NEXUS could not complete its automatic rollback; the system is observation-only.`,
+            };
+          }
+        }
+      }
+    }
+
     this.outcomes.set(outcome.id, outcome);
     for (const change of outcome.appliedChanges) {
       this.appliedHistory.push({ control: change.control, appliedAtMs: change.appliedAtMs });
@@ -1212,6 +1326,18 @@ export class NexusRuntime implements VesperHost {
 
   get telemetryPipeline(): TelemetryPipeline {
     return this.telemetry;
+  }
+
+  /** On-demand PresentMon evidence for bounded A/B experiments and the future UI. */
+  get presentMonCollector(): PresentMonCollector {
+    return this.presentMon;
+  }
+
+  async probeX3dTopology() {
+    if (this.platform !== 'win32') {
+      return { ok: false as const, error: nexusError('E_UNSUPPORTED', 'X3D topology probing is currently Windows-only') };
+    }
+    return probeCoreinfoTopology(this.runner);
   }
 
   get capabilityRegistry(): CapabilityRegistry {

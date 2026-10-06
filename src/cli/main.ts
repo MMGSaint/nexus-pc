@@ -47,6 +47,7 @@ Commands
   doctor                    Full diagnostic: health, hardware, capabilities, gaps
   health                    Current health report
   discover                  Hardware discovery report
+  topology                  Coreinfo CPU/cache topology report (optional)
   observe [--seconds N]     Watch telemetry without changing anything
   baseline [capture|show]   Capture or display the machine baseline
   profiles [list|show ID]   Profiles and exactly what each one changes
@@ -144,6 +145,24 @@ async function runCommand(
     case 'doctor': {
       await runtime.waitUntilInitialized();
       return doctor(runtime, json);
+    }
+
+    case 'topology': {
+      await runtime.waitUntilInitialized();
+      const topology = await runtime.probeX3dTopology();
+      if (!topology.ok) {
+        process.stderr.write(`CPU topology probe unavailable: ${topology.error.message}\n`);
+        return 4;
+      }
+      out(topology.value, [
+        heading('CPU/cache topology'),
+        `  Logical processors ${topology.value.logicalProcessorCount}`,
+        `  L3 domains          ${topology.value.l3Domains.length}`,
+        `  V-Cache domain      ${topology.value.vCacheDomain ? `${topology.value.vCacheDomain.sizeBytes! / 1024 ** 2} MiB / ${topology.value.vCacheDomain.logicalProcessors.length} logical processors` : 'not safely identified'}`,
+        `  Standard L3 domain  ${topology.value.standardCacheDomain ? `${topology.value.standardCacheDomain.sizeBytes! / 1024 ** 2} MiB / ${topology.value.standardCacheDomain.logicalProcessors.length} logical processors` : 'not identified'}`,
+        `  Detail              ${topology.value.detail}`,
+      ].join('\\n'));
+      return 0;
     }
 
     case 'discover': {

@@ -15,6 +15,7 @@ import type {
   TelemetrySummary,
 } from '../domain/telemetry.js';
 import { METRIC_UNITS, isKnown } from '../domain/telemetry.js';
+import type { FramePerformanceSummary } from '../performance/stats.js';
 
 export function summarize(
   snapshots: readonly TelemetrySnapshot[],
@@ -125,10 +126,87 @@ export const NOISE_FLOOR: Readonly<Partial<Record<MetricId, number>>> = Object.f
   'cpu.clock': 100,
   'gpu.clock': 50,
   'memory.available': 512 * 1024 * 1024,
+  'frame.time': 0.25,
+  'frame.fps': 1,
+  'frame.1pct_low': 1,
+  'frame.0_1pct_low': 1,
+  'frame.time.p95': 0.25,
+  'frame.time.p99': 0.5,
+  'frame.time.stddev': 0.25,
+  'frame.dropped': 1,
 });
 
 export function isSignificantChange(metric: MetricId, delta: number): boolean {
   const floor = NOISE_FLOOR[metric];
   if (floor === undefined) return delta !== 0;
   return Math.abs(delta) >= floor;
+}
+
+
+/**
+ * Convert a PresentMon capture into the same summary shape used by the
+ * optimizer. PresentMon owns frame collection; this adapter owns only the
+ * translation into NEXUS's evidence model.
+ */
+export function summarizePresentMon(
+  summary: FramePerformanceSummary,
+  capturedAtMs = Date.now(),
+): TelemetrySummary {
+  const metrics: MetricSummary[] = [];
+  const add = (
+    metric: MetricId,
+    mean: number | null,
+    p95: number | null = null,
+    samples = summary.sampleCount,
+  ): void => {
+    metrics.push({
+      metric,
+      unit: METRIC_UNITS[metric],
+      samples: Math.max(0, samples),
+      min: null,
+      max: null,
+      mean,
+      p95,
+      last: mean,
+      fidelity: 'live',
+      coverage: samples > 0 && mean !== null ? 1 : 0,
+    });
+  };
+
+  add('frame.time', summary.averageFrameTimeMs, summary.p95FrameTimeMs);
+  add('frame.fps', summary.fps);
+  add('frame.1pct_low', summary.fps1PercentLow);
+  add('frame.0_1pct_low', summary.fps0_1PercentLow);
+  add('frame.time.p95', summary.p95FrameTimeMs);
+  add('frame.time.p99', summary.p99FrameTimeMs);
+  add('frame.time.stddev', summary.frameTimeStdDevMs);
+  add('frame.dropped', summary.droppedFrames, null, summary.droppedFramesKnown ? summary.sampleCount : 0);
+
+  return {
+    fromMs: Math.max(0, capturedAtMs - summary.durationMs),
+    toMs: capturedAtMs,
+    metrics,
+    fidelity: summary.sampleCount > 0 ? 'live' : 'unavailable',
+    sampleCount: summary.sampleCount,
+  };
+}
+
+/** Merge independently captured evidence sources without overwriting metrics. */
+export function mergeSummaries(
+  primary: TelemetrySummary,
+  secondary: TelemetrySummary,
+): TelemetrySummary {
+  const byMetric = new Map<MetricId, MetricSummary>();
+  for (const metric of primary.metrics) byMetric.set(metric.metric, metric);
+  for (const metric of secondary.metrics) byMetric.set(metric.metric, metric);
+  const fidelities = [...byMetric.values()]
+    .filter((metric) => metric.samples > 0)
+    .map((metric) => metric.fidelity);
+  return {
+    fromMs: Math.min(primary.fromMs, secondary.fromMs),
+    toMs: Math.max(primary.toMs, secondary.toMs),
+    metrics: [...byMetric.values()].sort((a, b) => a.metric.localeCompare(b.metric)),
+    fidelity: fidelities.length > 0 ? combineFidelity(...fidelities) : 'unavailable',
+    sampleCount: Math.max(primary.sampleCount, secondary.sampleCount),
+  };
 }

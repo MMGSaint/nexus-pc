@@ -23,6 +23,14 @@ export const COMPARED_METRICS: readonly { metric: MetricId; betterWhen: 'higher'
   { metric: 'gpu.hotspot', betterWhen: 'lower' },
   { metric: 'cpu.power', betterWhen: 'lower' },
   { metric: 'memory.available', betterWhen: 'higher' },
+  { metric: 'frame.time', betterWhen: 'lower' },
+  { metric: 'frame.fps', betterWhen: 'higher' },
+  { metric: 'frame.1pct_low', betterWhen: 'higher' },
+  { metric: 'frame.0_1pct_low', betterWhen: 'higher' },
+  { metric: 'frame.time.p95', betterWhen: 'lower' },
+  { metric: 'frame.time.p99', betterWhen: 'lower' },
+  { metric: 'frame.time.stddev', betterWhen: 'lower' },
+  { metric: 'frame.dropped', betterWhen: 'lower' },
 ]);
 
 export function compare(before: TelemetrySummary, after: TelemetrySummary): MeasurementDelta[] {

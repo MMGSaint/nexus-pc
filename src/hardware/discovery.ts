@@ -22,6 +22,7 @@ import type { Result } from '../core/result.js';
 import { err } from '../core/result.js';
 import { writeJson } from '../core/fsx.js';
 import type { HardwareInventory } from '../domain/hardware.js';
+import { selectPrimaryGpuFromInventory } from './primary-gpu.js';
 import type { DiscoveryContext, HardwareProvider } from './provider.js';
 
 export interface DiscoveryOptions {
@@ -98,7 +99,7 @@ export class HardwareDiscovery {
 
 /** Human-readable one-line summary used by the CLI and health output. */
 export function describeInventory(inventory: HardwareInventory): string {
-  const gpu = inventory.gpus[0];
+  const gpu = selectPrimaryGpuFromInventory(inventory);
   const vram = gpu?.vramBytes;
   const parts = [
     inventory.cpu.model ?? 'unknown CPU',
