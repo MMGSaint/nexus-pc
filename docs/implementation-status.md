@@ -30,7 +30,7 @@ Exercised by the automated suite and verified to behave as described.
 | Crash recovery | Pre-write operations abandoned; mid-apply operations rolled back; unresolvable state reported and NEXUS drops to observation-only |
 | Audit log | Hash chain across records and segments; edit and deletion detected; concurrent appends serialised; secrets redacted from both data and message; bounded pruning that never empties the log |
 | Single instance | OS-level lock via named pipe / unix socket; stale socket reclaimed; holder identified in the refusal |
-| Session state | Clean vs unclean shutdown detection; restart-loop guard with a rolling window
+| Session state | Clean vs unclean shutdown detection; restart-loop guard with a rolling window |
 | WARDEN evidence | PresentMon frame truth, displayed/presented/application FPS, generated-frame awareness, display-latency evidence, driver-stamped baselines, staged game-state reconciliation, and VR capability isolation |
 | Staged startup | Health answerable during initialization; failures degrade rather than stop; required stages gate readiness |
 | Graceful shutdown | Ordered, bounded, idempotent; session marked clean; background init awaited |
@@ -57,8 +57,6 @@ an unavailable capability rather than an incorrect action.
 | Elevation behaviour | Which power settings actually require Administrator on this machine | Writes fail with a permission error, which is surfaced, not swallowed |
 | `install-nexus.ps1` | Task Scheduler registration on the target machine | Task is not registered; NEXUS does not start at logon; the script is intentionally per-user and does not require the NEXUS runtime to be online. |
 | `WindowsProcessEnumerator` (`tasklist`) | `tasklist.exe /FO CSV /NH` output shape and foreground-window access on real Windows | Probe fails; `process.enumerate` stays unavailable; classification runs without process evidence and lists it in `missingSignals` |
-
-### IMPLEMENTED + HARDWARE DEPENDENT
 
 | Component | What is unverified | Failure mode if wrong |
 |---|---|---|
