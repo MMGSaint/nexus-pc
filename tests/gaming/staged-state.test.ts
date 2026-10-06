@@ -11,7 +11,7 @@ const items: StagedChange[] = [
 test('staged changes activate only in their declared context', () => {
   assert.deepEqual(dueStagedChanges(items, 10, 'login').map((x) => x.id), ['a']);
   assert.deepEqual(dueStagedChanges(items, 10, 'launch').map((x) => x.id), ['b']);
-  assert.deepEqual(dueStagedChanges(items, 10, 'manual').map((x) => ['a','b','c'].includes(x.id)), [true,true,true]);
+  assert.deepEqual(dueStagedChanges(items, 10, 'manual').map((x) => ['a', 'b', 'c'].includes(x.id)), [true, true, true]);
 });
 
 test('expired changes are not returned', () => {
