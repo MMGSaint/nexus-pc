@@ -53,7 +53,7 @@ export function parseCoreinfoCacheOutput(stdout: string): X3dTopology {
   for (const raw of stdout.split(/\r?\n/)) {
     const line = raw.replace(/\r/g, '');
     const cache = /^(?<mask>[*-]+)\s+(?<kind>.+?Cache)\s+\d+,\s+Level\s+(?<level>\d+),\s+(?<size>[^,]+),/i.exec(line);
-    if (!cache?.groups?.mask || !cache.groups.level || !cache.groups.size) continue;
+    if (!cache?.groups?.mask || !cache.groups.level || !cache.groups.size || !cache.groups.kind) continue;
     const maskText = cache.groups.mask;
     logicalProcessorCount = Math.max(logicalProcessorCount, maskText.length);
     const level = Number(cache.groups.level);
