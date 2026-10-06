@@ -1752,14 +1752,23 @@ export class NexusRuntime implements VesperHost {
       if (outcome.status === 'applied_kept') {
         const named = await this.powerSandbox.keep(powerWorkspace, request.sandboxPowerPlanName ?? `NEXUS ${workload.workload}`);
         if (!named.ok) {
-          this.degrade(`Power-plan sandboxed experiment was kept but could not be named: ${named.error.message}`);
+          this.degrade(`Power-plan sandbox commit failed: ${named.error.message}`);
+          this.runState = 'observation_only';
+          outcome = {
+            ...outcome,
+            status: 'applied_unverified',
+            rolledBack: false,
+            summary: `${outcome.summary} The isolated winner could not be durably committed; NEXUS has quarantined further writes.`,
+            finishedAtMs: this.clock.now(),
+          };
+        } else {
+          await this.eventLog.append({
+            kind: 'power.sandbox.kept',
+            severity: 'notice',
+            message: `kept isolated power scheme ${powerWorkspace.sandboxGuid} active after a measured experiment`,
+            data: { sandboxGuid: powerWorkspace.sandboxGuid, originalGuid: powerWorkspace.originalGuid },
+          });
         }
-        await this.eventLog.append({
-          kind: 'power.sandbox.kept',
-          severity: 'notice',
-          message: `kept isolated power scheme ${powerWorkspace.sandboxGuid} active after a measured experiment`,
-          data: { sandboxGuid: powerWorkspace.sandboxGuid, originalGuid: powerWorkspace.originalGuid },
-        });
       } else {
         const restored = await this.powerSandbox.restore(powerWorkspace);
         if (!restored.ok) {
