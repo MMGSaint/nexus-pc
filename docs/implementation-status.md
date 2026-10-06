@@ -30,7 +30,8 @@ Exercised by the automated suite and verified to behave as described.
 | Crash recovery | Pre-write operations abandoned; mid-apply operations rolled back; unresolvable state reported and NEXUS drops to observation-only |
 | Audit log | Hash chain across records and segments; edit and deletion detected; concurrent appends serialised; secrets redacted from both data and message; bounded pruning that never empties the log |
 | Single instance | OS-level lock via named pipe / unix socket; stale socket reclaimed; holder identified in the refusal |
-| Session state | Clean vs unclean shutdown detection; restart-loop guard with a rolling window |
+| Session state | Clean vs unclean shutdown detection; restart-loop guard with a rolling window
+| WARDEN evidence | PresentMon frame truth, displayed/presented/application FPS, generated-frame awareness, display-latency evidence, driver-stamped baselines, staged game-state reconciliation, and VR capability isolation |
 | Staged startup | Health answerable during initialization; failures degrade rather than stop; required stages gate readiness |
 | Graceful shutdown | Ordered, bounded, idempotent; session marked clean; background init awaited |
 | Profiles | Built-in profiles validate against the policy; user profiles rejected for unknown fields, prohibited controls, out-of-policy values |
