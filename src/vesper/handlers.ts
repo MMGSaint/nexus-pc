@@ -41,6 +41,7 @@ export interface ProfileView {
   readonly name: string;
   readonly description: string;
   readonly targets: readonly string[];
+  readonly applicationIds?: readonly string[];
   readonly settings: readonly { readonly control: string; readonly value: string | number | boolean; readonly rationale: string }[];
   readonly applicableHere: boolean;
 }
