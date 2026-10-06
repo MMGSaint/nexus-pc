@@ -51,6 +51,19 @@ describe('classification', () => {
     expect(reasons).toContain('heuristic');
   });
 
+  it('exposes a stable application id from the same process-name heuristic', () => {
+    const result = classifier.classify(
+      signals({
+        cpuUtilization: 40,
+        gpuUtilization: 90,
+        processes: [{ name: 'SquadGame.exe', pid: 1, cpuPercent: 30, workingSetBytes: null, isForeground: true }],
+      }),
+    );
+    expect(result.detectedApplicationIds).toContain('squad');
+    expect(result.explanation).toContain('squad');
+    expect(result.explanation).toContain('process-name heuristic');
+  });
+
   it('recognises streaming when an encoder runs alongside a game', () => {
     const result = classifier.classify(
       signals({
