@@ -171,7 +171,7 @@ export class NexusRuntime implements VesperHost {
     this.runner = options.runner ?? new NodeCommandRunner();
     this.platform = options.platform ?? process.platform;
     this.presentMon = new PresentMonCollector({ runner: this.runner, paths: options.paths });
-    this.powerSandbox = new WindowsPowerPlanSandbox(this.runner);
+    this.powerSandbox = new WindowsPowerPlanSandbox(this.runner, 15_000, options.paths);
     this.processEnumerator = createProcessEnumerator({
       platform: this.platform,
       runner: this.runner,
