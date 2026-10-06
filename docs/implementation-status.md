@@ -90,7 +90,7 @@ request for them is refused with a reason rather than an "unknown capability".
 |---|---|
 | CPU die temperature, package power, per-core clocks | Requires the separate LibreHardwareMonitor bridge; NEXUS does not vendor its driver/library. |
 | GPU temperature, hotspot, fan RPM, board power, GPU clocks | Requires live sensor evidence from the separate LHM bridge and/or a future AMD adapter; NEXUS does not vendor ADLX. |
-| Process foreground detection | Not implemented. Enumerated processes report `isForeground: null`; the classifier does not rely on foreground state. |
+| Process foreground detection | Implemented through the Windows foreground-window probe and used only as corroborating evidence / PresentMon target ranking; still hardware dependent on the target PC. |
 | Process priority control | Depends on process enumeration (now available) plus a write adapter that is not implemented. Remains registered as unavailable. |
 | Fan control | Prohibited by policy — an incorrect curve is a thermal hazard NEXUS cannot recover from if it loses the interface mid-change. |
 | GPU and CPU silicon tuning | Prohibited by policy — validating an overclock safely requires a stress methodology NEXUS does not own. |
