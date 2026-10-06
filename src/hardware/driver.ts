@@ -13,10 +13,10 @@ export interface DisplayDriverIdentity {
 }
 
 const SCRIPT = [
-  '$ErrorActionPreference = ''Stop''',
-  '$rows = @(Get-CimInstance Win32_PnPSignedDriver -Filter "DeviceClass = ''DISPLAY''" | Where-Object { $_.DriverVersion } | Sort-Object DriverProviderName, DeviceName)',
+  `$ErrorActionPreference = 'Stop'`,
+  `$rows = @(Get-CimInstance Win32_PnPSignedDriver -Filter "DeviceClass = 'DISPLAY'" | Where-Object { $_.DriverVersion } | Sort-Object DriverProviderName, DeviceName)`,
   '$row = $rows | Select-Object -First 1 DriverVersion, DriverProviderName, DeviceName',
-  'if ($null -eq $row) { throw ''No signed display driver was found.'' }',
+  `if ($null -eq $row) { throw 'No signed display driver was found.' }`,
   '[pscustomobject]@{ version = [string]$row.DriverVersion; provider = [string]$row.DriverProviderName; deviceName = [string]$row.DeviceName } | ConvertTo-Json -Compress',
 ].join('; ');
 
