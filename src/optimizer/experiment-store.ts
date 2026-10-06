@@ -46,7 +46,7 @@ export class ExperimentStore {
   private readonly root: string;
 
   constructor(
-    private readonly paths: NexusPaths,
+    paths: NexusPaths,
     private readonly clock: Clock,
     private readonly logger: Logger,
   ) {
