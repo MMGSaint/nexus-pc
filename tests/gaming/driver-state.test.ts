@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import { reconcileDriver } from '../../src/gaming/driver-state.js';
 
 test('detects driver drift', () => {
