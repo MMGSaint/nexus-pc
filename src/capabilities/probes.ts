@@ -14,6 +14,8 @@ import { selectPrimaryGpuFromInventory } from '../hardware/primary-gpu.js';
 import type { MetricId, TelemetrySnapshot } from '../domain/telemetry.js';
 import { isKnown } from '../domain/telemetry.js';
 import type { ActuatorContext } from '../optimizer/actuator.js';
+import type { CommandRunner } from '../core/exec.js';
+import { readOpenXrRuntime } from '../vr/openxr.js';
 import type { ActuatorRegistry } from '../optimizer/actuator.js';
 import { getControl } from '../safety/controls.js';
 import type { ProcessEnumerator } from '../process/enumerate.js';
@@ -50,6 +52,7 @@ export interface ProbeSources {
   readonly vesperListening: boolean;
   /** Live process enumerator; probed rather than assumed from code existence. */
   readonly processEnumerator: ProcessEnumerator;
+  readonly runner: CommandRunner;
 }
 
 /** Telemetry capabilities and the metric each one depends on. */
@@ -273,6 +276,47 @@ export function buildCapabilityProbes(sources: () => ProbeSources): CapabilityPr
       },
     });
   }
+
+  probes.push({
+    descriptor: descriptor(
+      'frame.presentmon.capture',
+      'PresentMon frame capture',
+      'Collect frame-delivery evidence through the installed PresentMon collector.',
+      { backend: 'PresentMon', hardwareDependent: true },
+    ),
+    trust: 'live',
+    probe: async (): Promise<ProbeOutcome> => {
+      const { runner, platform } = sources();
+      if (platform !== 'win32') return { state: 'unsupported', detail: 'PresentMon capture is currently Windows-only' };
+      const result = await runner.run({
+        file: 'PresentMon.exe',
+        args: ['--version'],
+        timeoutMs: 5_000,
+        maxOutputBytes: 64 * 1024,
+      });
+      if (!result.ok) return { state: 'unavailable', detail: result.error.message };
+      if (result.value.code !== 0) return { state: 'unavailable', detail: result.value.stderr.trim() || 'PresentMon did not report a usable version' };
+      return { state: 'available', fidelity: 'live', backendVersion: result.value.stdout.trim().split(/\s+/).pop(), detail: 'PresentMon executable responded successfully' };
+    },
+  });
+
+  probes.push({
+    descriptor: descriptor(
+      'vr.openxr.runtime',
+      'OpenXR active runtime',
+      'Read-only discovery of the Windows OpenXR active runtime manifest.',
+      { backend: 'openxr.loader', hardwareDependent: true },
+    ),
+    trust: 'live',
+    probe: async (): Promise<ProbeOutcome> => {
+      if (sources().platform !== 'win32') return { state: 'unsupported', detail: 'Windows OpenXR runtime discovery is currently implemented only on Windows' };
+      const result = await readOpenXrRuntime(sources().runner);
+      if (!result.ok) return { state: 'unavailable', detail: result.error.message };
+      if (!result.value.active) return { state: 'unavailable', detail: 'no active OpenXR runtime is registered' };
+      if (!result.value.manifestExists) return { state: 'unavailable', detail: 'the registered OpenXR manifest path does not exist' };
+      return { state: 'available', fidelity: 'live', detail: result.value.name ? 'active runtime: ' + result.value.name : 'an active OpenXR runtime manifest is registered' };
+    },
+  });
 
   probes.push({
     descriptor: descriptor(
