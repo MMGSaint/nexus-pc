@@ -73,8 +73,8 @@ export function parseCoreinfoCacheOutput(stdout: string): X3dTopology {
   // Some Coreinfo fixtures/versions expose one short mask per cache domain
   // rather than one full-width logical-processor map. Preserve the strongest
   // observed count, and fall back to the combined L3 mask widths for that form.
-  const l3MaskWidth = l3Domains.reduce((sum, domain) => sum + domain.maskText.length, 0);
-  logicalProcessorCount = Math.max(logicalProcessorCount, l3MaskWidth);
+  const l3StarCount = l3Domains.reduce((sum, domain) => sum + domain.logicalProcessors.length, 0);
+  logicalProcessorCount = Math.max(logicalProcessorCount, l3StarCount);
   const sized = [...l3Domains].filter((d) => d.sizeBytes !== null).sort((a,b) => (b.sizeBytes! - a.sizeBytes!) || (b.logicalProcessors.length - a.logicalProcessors.length));
   const vCacheDomain = sized.length >= 2 && (sized[0]!.sizeBytes! / Math.max(1, sized[1]!.sizeBytes!)) >= 1.5 ? sized[0]! : null;
   const standardCacheDomain = vCacheDomain ? sized[1] ?? null : null;
