@@ -5,7 +5,7 @@ import { frameTruthReadings, requireFrameBenefit, type FrameTruth } from '../../
 const base = (overrides: Partial<FrameTruth['summary']> = {}): FrameTruth => ({
   capturedAtMs: 1,
   fidelity: 'live',
-  summary: { sampleCount: 300, durationMs: 3000, averageFrameTimeMs: 10, fps: 100, fps1PercentLow: 80, fps0_1PercentLow: 70, p95FrameTimeMs: 14, p99FrameTimeMs: 18, frameTimeStdDevMs: 1.5, droppedFrames: 0, droppedFramesKnown: true, ...overrides },
+  summary: { sampleCount: 300, durationMs: 3000, averageFrameTimeMs: 10, fps: 100, fps1PercentLow: 80, fps0_1PercentLow: 70, p95FrameTimeMs: 14, p99FrameTimeMs: 18, frameTimeStdDevMs: 1.5, presentIntervalMs: null, displayIntervalMs: null, displayedFps: null, presentedFps: null, applicationFrameCount: 300, applicationFps: 100, displayLatencyP95Ms: null, generatedFrameCount: 0, generatedFrameFraction: 0, afmfFrameCount: 0, droppedFrames: 0, droppedFramesKnown: true, ...overrides },
 });
 
 test('frame truth recognizes a meaningful improvement', () => {
