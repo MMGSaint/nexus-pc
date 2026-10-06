@@ -51,6 +51,7 @@ import type { RestoreResult } from '../checkpoint/store.js';
 import type { NexusConfig } from '../config/config.js';
 import { HardwareDiscovery } from '../hardware/discovery.js';
 import { automaticProfileGuard, specializeTarget } from '../hardware/specialization.js';
+import { selectPrimaryGpuFromInventory } from '../hardware/primary-gpu.js';
 import { LinuxHardwareProvider } from '../hardware/providers/linux.js';
 import { MockHardwareProvider } from '../hardware/providers/mock.js';
 import { WindowsHardwareProvider } from '../hardware/providers/windows.js';
@@ -1108,6 +1109,280 @@ export class NexusRuntime implements VesperHost {
         logicalProcessors,
       })),
       cpuSets: native.value,
+    };
+  }
+
+  async runExperiment(request: {
+    origin: 'user' | 'vesper';
+    requestedBy: string;
+    applicationId: string;
+    repetitions?: number;
+    maxCandidates?: number;
+    practicalThresholdPercent?: number;
+  }): Promise<ExperimentRunResult> {
+    const applicationId = request.applicationId.trim().toLowerCase();
+    if (!/^[a-z0-9._-]{1,63}$/.test(applicationId)) {
+      return {
+        status: 'blocked',
+        applicationId,
+        fingerprint: null,
+        candidates: [],
+        trials: [],
+        winner: null,
+        scoreMetric: 'frame.1pct_low',
+        score: decideExperiment([]).score,
+        finalOutcomeId: null,
+        detail: 'Application id is malformed.',
+      };
+    }
+
+    if (this.options.config.mode === 'observation' || this.runState === 'observation_only') {
+      return {
+        status: 'blocked',
+        applicationId,
+        fingerprint: null,
+        candidates: [],
+        trials: [],
+        winner: null,
+        scoreMetric: 'frame.1pct_low',
+        score: decideExperiment([]).score,
+        finalOutcomeId: null,
+        detail: this.runState === 'observation_only'
+          ? 'NEXUS is observation-only and cannot run tuner trials.'
+          : 'NEXUS is configured for observation-only operation.',
+      };
+    }
+
+    if (this.platform !== 'win32') {
+      return {
+        status: 'blocked',
+        applicationId,
+        fingerprint: null,
+        candidates: [],
+        trials: [],
+        winner: null,
+        scoreMetric: 'frame.1pct_low',
+        score: decideExperiment([]).score,
+        finalOutcomeId: null,
+        detail: 'The private tuner currently requires Windows power-plan and PresentMon support.',
+      };
+    }
+
+    const inventory = this.inventory;
+    const specialization = specializeTarget(inventory);
+    if (!inventory || !specialization.x3dSchedulingSensitive) {
+      return {
+        status: 'blocked',
+        applicationId,
+        fingerprint: null,
+        candidates: [],
+        trials: [],
+        winner: null,
+        scoreMetric: 'frame.1pct_low',
+        score: decideExperiment([]).score,
+        finalOutcomeId: null,
+        detail: 'The private tuner is currently restricted to the Ryzen 9 9950X3D family.',
+      };
+    }
+
+    // Require the target game to be the current foreground application. This stops
+    // a background Steam process from triggering a long sequence of power changes.
+    const target = await this.resolveFrameTarget(applicationId);
+    const foreground = await getForegroundProcess(this.runner).catch(() => null);
+    if (!target || !foreground?.ok || foreground.value.pid !== target.processId) {
+      return {
+        status: 'blocked',
+        applicationId,
+        fingerprint: null,
+        candidates: [],
+        trials: [],
+        winner: null,
+        scoreMetric: 'frame.1pct_low',
+        score: decideExperiment([]).score,
+        finalOutcomeId: null,
+        detail: 'The requested game is not the observed foreground process; tuner trials were refused.',
+      };
+    }
+
+    if (!this.baseline) {
+      const baseline = await this.captureBaseline();
+      if (!baseline.ok) {
+        return {
+          status: 'failed',
+          applicationId,
+          fingerprint: null,
+          candidates: [],
+          trials: [],
+          winner: null,
+          scoreMetric: 'frame.1pct_low',
+          score: decideExperiment([]).score,
+          finalOutcomeId: null,
+          detail: `Could not establish a baseline: ${baseline.error.message}`,
+        };
+      }
+    }
+
+    const current = await this.currentControlValues();
+    const dimensions = defaultPrivateX3dDimensions(current);
+    const candidates = makeCandidateGrid(dimensions, Math.max(2, Math.min(8, request.maxCandidates ?? 6)));
+    const repetitions = Math.max(2, Math.min(4, Math.floor(request.repetitions ?? 3)));
+    const trials: ExperimentTrialSummary[] = [];
+
+    const scoreFor = (outcome: OptimizationOutcome) => frameScorePercent(outcome.measurements);
+
+    for (const candidate of candidates) {
+      const deltas: number[] = [];
+      const outcomeIds: string[] = [];
+      let stabilityRegression = false;
+
+      for (let repetition = 0; repetition < repetitions; repetition += 1) {
+        const outcome = await this.runOptimization({
+          origin: request.origin,
+          requestedBy: request.requestedBy,
+          applicationId,
+          experimentCandidate: candidate.values,
+          transactionalExperiment: true,
+          sandboxPowerPlan: true,
+          rollbackPolicy: 'always',
+        });
+
+        outcomeIds.push(outcome.id);
+        const score = scoreFor(outcome);
+        if (score) deltas.push(score.deltaPercent);
+        stabilityRegression ||= outcome.stabilityRegression === true;
+
+        if (outcome.status === 'applied_unverified' || stabilityRegression || this.runState === 'observation_only') {
+          break;
+        }
+      }
+
+      const decision = decideExperiment(deltas, {
+        practicalThresholdPercent: request.practicalThresholdPercent ?? 1,
+        seed: candidate.id.length * 97 + deltas.length,
+        stabilityRegression,
+      });
+
+      trials.push({
+        candidateId: candidate.id,
+        candidate: candidate.values,
+        repetitions,
+        deltaPercent: deltas,
+        decision,
+        stabilityRegression,
+        outcomeIds,
+      });
+
+      if (stabilityRegression || this.runState === 'observation_only') break;
+    }
+
+    const viable = trials
+      .filter((trial) => trial.decision.keep && !trial.stabilityRegression)
+      .sort((a, b) =>
+        (b.decision.score.low ?? Number.NEGATIVE_INFINITY) - (a.decision.score.low ?? Number.NEGATIVE_INFINITY) ||
+        (b.decision.score.estimate ?? Number.NEGATIVE_INFINITY) - (a.decision.score.estimate ?? Number.NEGATIVE_INFINITY),
+      );
+    const bestTrial = viable[0] ?? null;
+    const winner = bestTrial
+      ? candidates.find((candidate) => candidate.id === bestTrial.candidateId) ?? null
+      : null;
+
+    const primaryGpu = selectPrimaryGpuFromInventory(inventory);
+    const fingerprint = fingerprintExperiment({
+      machine: {
+        cpu: inventory.cpu.model,
+        gpu: primaryGpu?.model ?? null,
+        memoryBytes: inventory.memory.installedBytes,
+      },
+      os: {
+        version: inventory.os.version,
+        build: inventory.os.build,
+      },
+      platform: {
+        driverVersion: primaryGpu?.driverVersion ?? null,
+        biosVersion: null,
+        chipsetVersion: null,
+      },
+      workload: {
+        applicationId,
+        gameBuild: null,
+      },
+    });
+
+    let finalOutcomeId: string | null = null;
+    if (winner) {
+      const finalOutcome = await this.runOptimization({
+        origin: request.origin,
+        requestedBy: request.requestedBy,
+        applicationId,
+        experimentCandidate: winner.values,
+        sandboxPowerPlan: true,
+        rollbackPolicy: 'unless_benefit',
+        transactionalExperiment: false,
+        sandboxPowerPlanName: `NEXUS ${applicationId}`,
+      });
+      finalOutcomeId = finalOutcome.id;
+      if (finalOutcome.status !== 'applied_kept') {
+        // A candidate can win the multi-trial comparison and still fail the final
+        // confirmation window. Conservatively report that no durable change won.
+        const record: ExperimentRecord = {
+          id: this.ids.next('exp'),
+          fingerprint,
+          applicationId,
+          candidate: winner.values,
+          decision: 'rollback',
+          scorePercent: bestTrial?.decision.score.estimate ?? null,
+          confidenceLowPercent: bestTrial?.decision.score.low ?? null,
+          confidenceHighPercent: bestTrial?.decision.score.high ?? null,
+          createdAtMs: this.clock.now(),
+          detail: `Winner failed its final verification window: ${finalOutcome.summary}`,
+        };
+        await this.experimentStore.save(record);
+        return {
+          status: 'inconclusive',
+          applicationId,
+          fingerprint,
+          candidates,
+          trials,
+          winner,
+          scoreMetric: bestTrial ? (trials.find((t) => t.candidateId === bestTrial.candidateId)?.decision ? 'frame.1pct_low' : 'frame.1pct_low') : 'frame.1pct_low',
+          score: bestTrial?.decision.score ?? decideExperiment([]).score,
+          finalOutcomeId,
+          detail: `A winner was measured, but its final keep attempt did not pass: ${finalOutcome.summary}`,
+        };
+      }
+    }
+
+    const bestScore = bestTrial?.decision.score ?? decideExperiment([]).score;
+    const decision: ExperimentRecord['decision'] = winner ? 'keep' : 'inconclusive';
+    const record: ExperimentRecord = {
+      id: this.ids.next('exp'),
+      fingerprint,
+      applicationId,
+      candidate: winner?.values ?? {},
+      decision,
+      scorePercent: bestScore.estimate,
+      confidenceLowPercent: bestScore.low,
+      confidenceHighPercent: bestScore.high,
+      createdAtMs: this.clock.now(),
+      detail: winner
+        ? `Measured winner across ${bestTrial?.repetitions ?? repetitions} repetition(s); final outcome ${finalOutcomeId ?? 'none'}.`
+        : `No candidate cleared the practical threshold after ${trials.length} candidate(s).`,
+    };
+    await this.experimentStore.save(record);
+
+    return {
+      status: winner ? 'kept' : 'inconclusive',
+      applicationId,
+      fingerprint,
+      candidates,
+      trials,
+      winner,
+      scoreMetric: bestTrial ? 'frame.1pct_low' : 'frame.1pct_low',
+      score: bestScore,
+      finalOutcomeId,
+      detail: winner
+        ? `NEXUS measured a credible frame-performance winner for ${applicationId} and applied its final verification pass.`
+        : `NEXUS found no statistically credible ${applicationId} tuner winner worth keeping.`,
     };
   }
 
