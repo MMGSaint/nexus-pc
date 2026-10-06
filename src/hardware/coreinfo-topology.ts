@@ -9,7 +9,6 @@
  */
 
 import type { CommandRunner } from '../core/exec.js';
-import { runPowerShell } from '../core/exec.js';
 import { nexusError, type NexusError } from '../core/errors.js';
 import type { Result } from '../core/result.js';
 import { err, ok } from '../core/result.js';
