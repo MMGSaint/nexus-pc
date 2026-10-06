@@ -38,6 +38,7 @@ export const EVENT_KINDS = [
   'optimization.kept',
   'optimization.no_action',
   'optimization.failed',
+  'stability.observed',
   'checkpoint.created',
   'checkpoint.restored',
   'checkpoint.restore_failed',
