@@ -77,10 +77,7 @@ function lowFps(frameTimes: readonly number[], fraction: number): number | null 
 
 export function summarizeFrames(samples: readonly FrameSample[]): FramePerformanceSummary {
   const frameTimes = finite(samples.map((s) => s.frameTimeMs).filter((x) => x >= 0));
-  const durationMs =
-    frameTimes.length > 1
-      ? Math.max(0, samples[samples.length - 1]!.frameTimeMs)
-      : 0;
+  const durationMs = frameTimes.reduce((sum, value) => sum + value, 0);
   const dropped = samples.filter((s) => s.dropped === true).length;
   const droppedKnown = samples.some((s) => s.dropped !== undefined);
   const avg = mean(frameTimes);
