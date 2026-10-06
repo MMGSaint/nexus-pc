@@ -258,6 +258,7 @@ export const BASE_POLICY: SafetyPolicy = buildBasePolicy();
 export const TRANSACTIONAL_EXPERIMENT_CONTROLS: ReadonlySet<ControlId> = new Set<ControlId>([
   'power.processor.epp',
   'power.processor.boost_mode',
+  'power.processor.min_state',
 ]);
 
 /* ------------------------------------------------------------- narrowing */
