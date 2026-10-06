@@ -592,6 +592,7 @@ export class NexusRuntime implements VesperHost {
         platform: this.platform,
         vesperListening: this.vesper?.listening ?? false,
         processEnumerator: this.processEnumerator,
+        runner: this.runner,
       })),
     );
   }
