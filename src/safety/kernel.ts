@@ -427,7 +427,11 @@ export class SafetyKernel {
     const lastApplied = context.recentApplications
       .filter((r) => r.control === control)
       .reduce<number | null>((acc, r) => (acc === null || r.appliedAtMs > acc ? r.appliedAtMs : acc), null);
-    if (lastApplied !== null && context.nowMs - lastApplied < policy.cooldownMs) {
+    if (
+      context.transactionalExperiment !== true &&
+      lastApplied !== null &&
+      context.nowMs - lastApplied < policy.cooldownMs
+    ) {
       const waitMs = policy.cooldownMs - (context.nowMs - lastApplied);
       block(
         'COOLDOWN',
