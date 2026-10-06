@@ -23,7 +23,7 @@ const SCRIPT = [
   '$exists = $false',
   '$name = $null',
   'if ($path) { $exists = Test-Path -LiteralPath $path; if ($exists) { try { $m = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json; if ($m.runtime.name) { $name = [string]$m.runtime.name } } catch {} } }',
-  '[pscustomobject]@{ active = [bool]$path; manifestPath = if ($path) { [string]$path } else { $null }; name = $name; manifestExists = [bool]$exists; source = if ($hkcu -and $path -eq [string]$hkcu.ActiveRuntime) { 'registry' } elseif ($hklm -and $path -eq [string]$hklm.ActiveRuntime) { 'registry' } else { 'unavailable' } } | ConvertTo-Json -Compress',
+  `[pscustomobject]@{ active = [bool]$path; manifestPath = if ($path) { [string]$path } else { $null }; name = $name; manifestExists = [bool]$exists; source = if ($hkcu -and $path -eq [string]$hkcu.ActiveRuntime) { 'registry' } elseif ($hklm -and $path -eq [string]$hklm.ActiveRuntime) { 'registry' } else { 'unavailable' } } | ConvertTo-Json -Compress`,
 ].join('; ');
 
 export async function readOpenXrRuntime(runner: CommandRunner): Promise<Result<OpenXrRuntimeIdentity, NexusError>> {
