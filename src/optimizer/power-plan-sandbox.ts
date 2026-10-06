@@ -13,18 +13,36 @@
 import type { CommandRunner } from '../core/exec.js';
 import { nexusError, type NexusError } from '../core/errors.js';
 import type { Result } from '../core/result.js';
+import { ensureDir, readJson, removeFile, writeJson } from '../core/fsx.js';
 import { err, ok } from '../core/result.js';
+import type { NexusPaths } from '../core/paths.js';
+import { vBoolean, vObject, vString } from '../core/validate.js';
 
 const GUID = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
+const workspaceSchema = vObject({
+  originalGuid: vString({ maxLength: 64 }),
+  sandboxGuid: vString({ maxLength: 64 }),
+  active: vBoolean(),
+  mode: vString({ maxLength: 32 }),
+});
 
 export interface PowerPlanWorkspace {
   readonly originalGuid: string;
   readonly sandboxGuid: string;
   readonly active: boolean;
+  readonly mode: 'transaction' | 'kept';
 }
 
 export class WindowsPowerPlanSandbox {
-  constructor(private readonly runner: CommandRunner, private readonly timeoutMs = 15_000) {}
+  private readonly statePath: string | null;
+
+  constructor(
+    private readonly runner: CommandRunner,
+    private readonly timeoutMs = 15_000,
+    paths?: NexusPaths,
+  ) {
+    this.statePath = paths ? path.join(paths.state, 'power-plan-sandbox.json') : null;
+  }
 
   async prepare(): Promise<Result<PowerPlanWorkspace, NexusError>> {
     const active = await this.runner.run({
@@ -74,7 +92,13 @@ export class WindowsPowerPlanSandbox {
       return err(nexusError('E_VERIFY_FAILED', 'powercfg did not verify the sandbox scheme became active'));
     }
 
-    return ok({ originalGuid: original.toLowerCase(), sandboxGuid: sandbox.toLowerCase(), active: true });
+    const workspace: PowerPlanWorkspace = { originalGuid: original.toLowerCase(), sandboxGuid: sandbox.toLowerCase(), active: true, mode: 'transaction' };
+    const persisted = await this.persist(workspace);
+    if (!persisted.ok) {
+      await this.restoreAndDelete(workspace.originalGuid, workspace.sandboxGuid);
+      return err(persisted.error);
+    }
+    return ok(workspace);
   }
 
   async restore(workspace: PowerPlanWorkspace): Promise<Result<true, NexusError>> {
@@ -101,6 +125,7 @@ export class WindowsPowerPlanSandbox {
 
     const deleted = await this.delete(workspace.sandboxGuid);
     if (!deleted.ok) return deleted;
+    await this.clearPersisted();
     return ok(true);
   }
 
@@ -121,7 +146,25 @@ export class WindowsPowerPlanSandbox {
         return err(nexusError('E_IO', `powercfg could not name the kept plan: ${renamed.value.stderr.trim() || `exit ${renamed.value.code}`}`));
       }
     }
+    const persisted = await this.persist({ ...workspace, mode: 'kept' });
+    if (!persisted.ok) return persisted;
     return ok(true);
+  }
+
+  async recoverOrphaned(): Promise<Result<'none' | 'restored', NexusError>> {
+    if (!this.statePath) return ok('none');
+    const loaded = await readJson(this.statePath, workspaceSchema);
+    if (!loaded.ok) {
+      if (loaded.error.code === 'E_UNAVAILABLE') return ok('none');
+      return err(loaded.error);
+    }
+    const workspace = loaded.value as unknown as PowerPlanWorkspace;
+    if (workspace.mode === 'kept') return ok('none');
+    if (!workspace.active) { await this.clearPersisted(); return ok('none'); }
+    const restored = await this.restoreAndDeleteResult(workspace.originalGuid, workspace.sandboxGuid);
+    if (!restored.ok) return restored;
+    await this.clearPersisted();
+    return ok('restored');
   }
 
   async delete(guid: string): Promise<Result<true, NexusError>> {
@@ -138,8 +181,31 @@ export class WindowsPowerPlanSandbox {
     return ok(true);
   }
 
+  private async persist(workspace: PowerPlanWorkspace): Promise<Result<true, NexusError>> {
+    if (!this.statePath) return ok(true);
+    const ready = await ensureDir(path.dirname(this.statePath));
+    if (!ready.ok) return ready;
+    return writeJson(this.statePath, workspace, { fsyncData: true });
+  }
+
+  private async clearPersisted(): Promise<void> {
+    if (this.statePath) await removeFile(this.statePath);
+  }
+
+  private async restoreAndDeleteResult(original: string, sandbox: string): Promise<Result<true, NexusError>> {
+    const restored = await this.runner.run({ file: 'powercfg.exe', args: ['/setactive', original], timeoutMs: this.timeoutMs });
+    if (!restored.ok) return restored;
+    if (restored.value.code !== 0) return err(nexusError('E_IO', `powercfg could not restore the original scheme: ${restored.value.stderr.trim() || `exit ${restored.value.code}`}`));
+    const verified = await this.runner.run({ file: 'powercfg.exe', args: ['/getactivescheme'], timeoutMs: this.timeoutMs });
+    if (!verified.ok) return err(verified.error);
+    const observed = GUID.exec(verified.value.stdout)?.[0]?.toLowerCase();
+    if (observed !== original.toLowerCase()) return err(nexusError('E_VERIFY_FAILED', 'powercfg did not verify orphaned-sandbox recovery')); 
+    const deleted = await this.delete(sandbox);
+    if (!deleted.ok) return deleted;
+    return ok(true);
+  }
+
   private async restoreAndDelete(original: string, sandbox: string): Promise<void> {
-    await this.runner.run({ file: 'powercfg.exe', args: ['/setactive', original], timeoutMs: this.timeoutMs });
-    await this.delete(sandbox);
+    await this.restoreAndDeleteResult(original, sandbox);
   }
 }
