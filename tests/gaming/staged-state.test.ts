@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import { dueStagedChanges, expireStagedChanges, type StagedChange } from '../../src/gaming/staged-state.js';
 
 const items: StagedChange[] = [
