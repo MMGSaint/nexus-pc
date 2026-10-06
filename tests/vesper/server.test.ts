@@ -297,6 +297,45 @@ describe('input validation', () => {
   });
 });
 
+describe('evidence methods', () => {
+  it('returns rich performance evidence only when the host implements it', async () => {
+    const { client } = await startServer(
+      [...DEFAULT_SCOPES],
+      fakeHost({
+        getPerformanceEvidence: async () => ({
+          fidelity: 'live',
+          capturedAtMs: 2,
+          frameTarget: { processId: 42, processName: 'SquadGame.exe' },
+          frame: { sampleCount: 10, fps: 144 },
+        }),
+      }),
+    );
+    const response = await client.call('getPerformanceEvidence', TOKEN, { windowMs: 5_000, applicationId: 'squad' });
+    expect(response.ok).toBe(true);
+    if (!response.ok) return;
+    expect(response.fidelity).toBe('live');
+    expect((response.result as { frameTarget: { processId: number } }).frameTarget.processId).toBe(42);
+  });
+
+  it('does not expose decision evidence without an outcome id', async () => {
+    const { client } = await startServer([...DEFAULT_SCOPES, 'status']);
+    const response = await client.call('getDecisionEvidence', TOKEN);
+    expect(response.ok).toBe(false);
+    if (response.ok) return;
+    expect(response.error.code).toBe('E_INVALID_INPUT');
+  });
+
+  it('keeps topology read-only and reports unavailable hosts honestly', async () => {
+    const { client } = await startServer([...DEFAULT_SCOPES, 'capabilities'], fakeHost({
+      getTopology: async () => null,
+    }));
+    const response = await client.call('getTopology', TOKEN);
+    expect(response.ok).toBe(false);
+    if (response.ok) return;
+    expect(response.error.code).toBe('E_UNAVAILABLE');
+  });
+});
+
 describe('context declaration', () => {
   it('records a declared context as a hint rather than a command', async () => {
     let received: unknown = null;
