@@ -4,7 +4,7 @@ The procedure for bringing NEXUS up on the real machine for the first time.
 **Observation and evidence come first.** Nothing is tuned until NEXUS has shown
 it is reading the hardware correctly.
 
-Target machine: Windows, Ryzen 9 9950X, Radeon RX 7900 XT (20 GB), 96 GB RAM.
+Target machine: Windows, Ryzen 9 9950X3D, Radeon RX 7900 XT (20 GB), 96 GB RAM.
 
 ---
 
@@ -51,7 +51,7 @@ Check every line against the real machine:
 
 | Expect | If wrong |
 |---|---|
-| `AMD Ryzen 9 9950X`, 16 cores / 32 threads | CIM query failed — check the warnings |
+| `AMD Ryzen 9 9950X3D`, 16 cores / 32 threads | CIM query failed — check the warnings |
 | `AMD Radeon RX 7900 XT` | Adapter not enumerated |
 | **20.0 GiB** VRAM, source `registry:HardwareInformation.qwMemorySize` | If ~4 GiB and source is `AdapterRAM`, the registry read failed. The warning will say the figure is a lower bound. Report it; do not proceed as if VRAM is known. |
 | **96.0 GiB installed**, usable slightly lower | A large gap means memory is reserved or a module is not enumerated |
@@ -230,3 +230,7 @@ node dist\cli\main.js audit tail --count 100 --json > nexus-audit.json
 
 Neither file contains credentials — the audit log is redacted — but read them
 before sharing.
+
+### Target-specific note
+
+This private checkout is specialized for a Ryzen 9 9950X3D. Do not treat the generic gaming profile's all-core-unparked / 20% floor recipe as validated for this CPU. First validate sensors and actual frame-time behaviour, then add CCD-aware scheduling experiments. A profile explicitly selected by the user is still evaluated normally by the safety kernel.
