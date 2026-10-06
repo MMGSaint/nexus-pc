@@ -25,6 +25,7 @@ import {
   vEnum,
   vNumber,
   vObject,
+  vOptional,
   vString,
   vUnion,
 } from '../core/validate.js';
