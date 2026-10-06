@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import { frameTruthReadings, requireFrameBenefit, type FrameTruth } from '../../src/performance/frame-truth.js';
 
 const base = (overrides: Partial<FrameTruth['summary']> = {}): FrameTruth => ({
