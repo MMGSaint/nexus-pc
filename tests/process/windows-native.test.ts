@@ -5,11 +5,12 @@ import { getForegroundProcess, getSystemCpuSets, setProcessDefaultCpuSets } from
 import { WindowsProcessPlacementController } from '../../src/process/placement.js';
 
 const HELPER = 'C:\\NEXUS\\native-windows-helper.exe';
+const HELPER_SHA256 = '0'.repeat(64);
 
 describe('native Windows bridge', () => {
   it('fails closed without an explicitly configured helper path on Windows', async () => {
     const runner = new ScriptedCommandRunner();
-    const result = await getForegroundProcess(runner, { executable: HELPER });
+    const result = await getForegroundProcess(runner, { executable: HELPER, expectedSha256: HELPER_SHA256 });
     if (process.platform === 'win32') {
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe('E_UNAVAILABLE');
@@ -26,7 +27,7 @@ describe('native Windows bridge', () => {
         })),
       },
     ]);
-    const result = await getForegroundProcess(runner);
+    const result = await getForegroundProcess(runner, { executable: HELPER, expectedSha256: HELPER_SHA256 });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.pid).toBe(4242);
@@ -47,7 +48,7 @@ describe('native Windows bridge', () => {
         })),
       },
     ]);
-    const result = await getSystemCpuSets(runner, { executable: HELPER });
+    const result = await getSystemCpuSets(runner, { executable: HELPER, expectedSha256: HELPER_SHA256 });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value).toHaveLength(2);
@@ -80,7 +81,7 @@ describe('WindowsProcessPlacementController', () => {
         })),
       },
     ]);
-    const result = await new WindowsProcessPlacementController(runner, { executable: HELPER }).planForCacheDomain(99, 7);
+    const result = await new WindowsProcessPlacementController(runner, { executable: HELPER, expectedSha256: HELPER_SHA256 }).planForCacheDomain(99, 7);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.target).toEqual([10, 11]);
@@ -108,7 +109,7 @@ describe('CPU Set safety helpers', () => {
         })),
       },
     ]);
-    const result = await setProcessDefaultCpuSets(runner, 1, [0], { executable: HELPER });
+    const result = await setProcessDefaultCpuSets(runner, 1, [0], { executable: HELPER, expectedSha256: HELPER_SHA256 });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.ids).toEqual([0]);

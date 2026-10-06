@@ -37,7 +37,7 @@ export interface NativeWindowsHelperOptions {
 }
 
 function helperName(options?: NativeWindowsHelperOptions): string | null {
-  const executable = options?.executable ?? null;
+  const executable = options?.executable ?? (process.platform === 'win32' ? null : 'nexus-native-helper.exe');
   if (process.platform === 'win32' && (!executable || !/^[A-Za-z]:[\\/]/.test(executable))) return null;
   if (process.platform === 'win32' && (!options?.expectedSha256 || !/^[a-fA-F0-9]{64}$/.test(options.expectedSha256))) return null;
   return executable;
