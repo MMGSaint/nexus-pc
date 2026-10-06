@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import { reconcileAmdGameState } from '../../src/gaming/amd.js';
 
 test('AMD reconciliation distrusts non-live driver state', () => {
