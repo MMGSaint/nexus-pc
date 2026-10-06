@@ -126,11 +126,11 @@ around it.
 ## `os.cpus()` limits on very large machines
 
 Node's `os.cpus()` is capped at 64 logical processors on Windows. Irrelevant
-for a 32-thread 9950X, but no topology feature should be built on it.
+for a 32-thread 9950X3D, but no topology feature should be built on it.
 
 ## WMI cannot see CCD boundaries
 
-The 9950X3D uses an X3D-specific multi-CCD topology whose cache/scheduling behaviour matters, which matters for
+The 9950X3D uses an X3D-specific multi-CCD topology whose cache and scheduling behaviour matters for
 scheduling and for interpreting per-CCD temperatures. `Win32_Processor` reports
 one socket with 16 cores and no hint of the split. NEXUS does not currently
 expose CCD topology.
