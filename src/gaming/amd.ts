@@ -15,11 +15,14 @@ export interface AmdGameState {
 
 export interface AmdStateAdapter {
   readonly id: string;
+  /** Observation-only boundary. This adapter may read AMD state but can never mutate it. */
   readGameState(gameId: string): Promise<AmdGameState>;
-  applySettings(
-    gameId: string,
-    settings: readonly { key: string; value: AmdValue }[],
-  ): Promise<{ applied: readonly string[]; rejected: readonly { key: string; reason: string }[] }>;
+}
+
+/** Proposed AMD mutations are data; the SafetyKernel-owned actuator is the only writer. */
+export interface AmdSettingProposal {
+  readonly key: string;
+  readonly value: AmdValue;
 }
 
 /**

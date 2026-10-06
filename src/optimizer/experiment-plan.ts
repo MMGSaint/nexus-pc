@@ -1,4 +1,5 @@
 import type { ControlId, ControlValue } from '../domain/control.js';
+import type { Fidelity } from '../core/fidelity.js';
 import type { MeasurementDelta } from '../domain/optimization.js';
 import {
   mean,
@@ -156,6 +157,8 @@ export interface ExperimentTrialSummary {
 }
 
 export interface ExperimentRunResult {
+  /** Weakest provenance across every trial/final verification outcome. */
+  readonly fidelity: Fidelity;
   readonly status: 'kept' | 'inconclusive' | 'blocked' | 'failed';
   readonly applicationId: string;
   readonly fingerprint: ExperimentFingerprint | null;

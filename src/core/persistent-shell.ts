@@ -31,7 +31,7 @@ import { nexusError, toNexusError } from './errors.js';
 import type { Logger } from './logger.js';
 import type { Result } from './result.js';
 import { err, ok } from './result.js';
-import { isAllowedExecutable } from './exec.js';
+import { isAllowedExecutable, resolveTrustedSystemExecutable } from './exec.js';
 
 export const READY_MARKER = 'NEXUSREADY';
 export const JSON_PREFIX = 'NEXUSJSON ';
@@ -102,6 +102,17 @@ export class PersistentShell {
       return err(nexusError('E_INVALID_INPUT', `executable is not on the NEXUS allowlist: ${this.options.file}`));
     }
 
+    // PersistentShell owns its own spawn boundary and therefore cannot rely on
+    // NodeCommandRunner's PATH hardening. System tools are resolved to System32;
+    // third-party helpers must be explicit absolute paths.
+    let launchFile = this.options.file;
+    if (!/^[A-Za-z]:[\\/]/.test(launchFile) && process.platform === 'win32') {
+      launchFile = resolveTrustedSystemExecutable(launchFile) ?? '';
+      if (!launchFile) {
+        return err(nexusError('E_INVALID_INPUT', 'non-system Windows persistent shells must use an explicit absolute executable path'));
+      }
+    }
+
     const now = this.options.clock.now();
     this.restarts = this.restarts.filter((t) => now - t < this.options.restartWindowMs);
     if (this.restarts.length >= this.options.maxRestarts) {
@@ -114,7 +125,7 @@ export class PersistentShell {
     this.starting = new Promise<Result<true, NexusError>>((resolve) => {
       let child: ChildProcessWithoutNullStreams;
       try {
-        child = this.options.spawnFn(this.options.file, this.options.args);
+        child = this.options.spawnFn(launchFile, this.options.args);
       } catch (e) {
         resolve(err(toNexusError(e, 'E_UNAVAILABLE')));
         return;

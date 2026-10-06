@@ -93,7 +93,8 @@ export class SensorBridgeSource implements TelemetrySource {
    * `live`: the helper reads real silicon. It is still validated, aged and
    * clamped like every other source, and reports `unavailable` when absent.
    */
-  readonly trust = 'live' as const;
+  /** Local HTTP/file bridges are schema-validated but not producer-authenticated. */
+  readonly trust = 'unverified' as const;
   readonly metrics: readonly MetricId[] = BRIDGE_METRICS;
 
   private readonly file: string;
@@ -156,7 +157,7 @@ export class SensorBridgeSource implements TelemetrySource {
           value: entry.value,
           timestampMs: doc.capturedAtMs,
           source: `${this.id}:${doc.producer}`,
-          fidelity: 'live',
+          fidelity: 'unverified',
           confidence: 0.95,
           ...(entry.note === undefined ? {} : { note: entry.note }),
         }),

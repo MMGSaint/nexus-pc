@@ -26,17 +26,20 @@ export interface PlacementResult {
 }
 
 export class WindowsProcessPlacementController {
-  constructor(private readonly runner: CommandRunner) {}
+  constructor(
+    private readonly runner: CommandRunner,
+    private readonly helperOptions?: NativeWindowsHelperOptions,
+  ) {}
 
   async planForCacheDomain(
     pid: number,
     cacheDomain: number,
     options: { includeParked?: boolean; requireAllUnallocated?: boolean } = {},
   ): Promise<Result<ProcessPlacementPlan, NexusError>> {
-    const before = await getProcessDefaultCpuSets(this.runner, pid);
+    const before = await getProcessDefaultCpuSets(this.runner, pid, this.helperOptions);
     if (!before.ok) return before;
 
-    const topology = await getSystemCpuSets(this.runner);
+    const topology = await getSystemCpuSets(this.runner, this.helperOptions);
     if (!topology.ok) return topology;
 
     const candidates = (options.includeParked ? topology.value : safeCpuSets(topology.value))
@@ -64,7 +67,7 @@ export class WindowsProcessPlacementController {
   }
 
   async apply(plan: ProcessPlacementPlan): Promise<Result<PlacementResult, NexusError>> {
-    const observedBefore = await getProcessDefaultCpuSets(this.runner, plan.pid);
+    const observedBefore = await getProcessDefaultCpuSets(this.runner, plan.pid, this.helperOptions);
     if (!observedBefore.ok) return observedBefore;
 
     // Drift check: do not clobber a user/application assignment that changed
@@ -80,7 +83,7 @@ export class WindowsProcessPlacementController {
       ));
     }
 
-    const applied = await setProcessDefaultCpuSets(this.runner, plan.pid, plan.target);
+    const applied = await setProcessDefaultCpuSets(this.runner, plan.pid, plan.target, this.helperOptions);
     if (!applied.ok) return applied;
 
     return ok({
@@ -91,6 +94,6 @@ export class WindowsProcessPlacementController {
   }
 
   async rollback(plan: ProcessPlacementPlan): Promise<Result<DefaultCpuSets, NexusError>> {
-    return setProcessDefaultCpuSets(this.runner, plan.pid, plan.before);
+    return setProcessDefaultCpuSets(this.runner, plan.pid, plan.before, this.helperOptions);
   }
 }

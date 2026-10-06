@@ -18,6 +18,9 @@
  */
 
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { readFile, realpath } from 'node:fs/promises';
+import path from 'node:path';
 
 import type { Result } from './result.js';
 import { err, ok } from './result.js';
@@ -57,6 +60,15 @@ export const ALLOWED_EXECUTABLES: readonly string[] = Object.freeze([
 
 const ALLOWED = new Set(ALLOWED_EXECUTABLES);
 
+const WINDOWS_SYSTEM_EXECUTABLES = new Set([
+  'powershell',
+  'powercfg',
+  'reg',
+  'schtasks',
+  'sc',
+  'tasklist',
+]);
+
 export interface CommandRequest {
   readonly file: string;
   readonly args: readonly string[];
@@ -66,6 +78,10 @@ export interface CommandRequest {
   readonly env?: Readonly<Record<string, string>>;
   /** Optional bounded stdin payload for allowlisted helper processes. */
   readonly stdin?: string;
+  /** Require an absolute executable path; useful for third-party tools that must never resolve through PATH. */
+  readonly requireAbsolutePath?: boolean;
+  /** SHA-256 pin for an executable. When supplied, the resolved target must match exactly. */
+  readonly expectedSha256?: string;
 }
 
 export interface CommandResult {
@@ -103,9 +119,20 @@ export function isAllowedExecutable(file: string): boolean {
   return ALLOWED.has(executableBasename(file));
 }
 
+/** Resolve a bare allowlisted Windows system tool without consulting PATH. */
+export function resolveTrustedSystemExecutable(file: string): string | null {
+  if (process.platform !== 'win32') return null;
+  const basename = executableBasename(file);
+  if (!WINDOWS_SYSTEM_EXECUTABLES.has(basename)) return null;
+  const root = process.env.SystemRoot ?? 'C:\\Windows';
+  return path.join(root, 'System32', `${basename}.exe`);
+}
+
 export class NodeCommandRunner implements CommandRunner {
   async run(request: CommandRequest): Promise<Result<CommandResult, NexusError>> {
-    if (!isAllowedExecutable(request.file)) {
+    const launch = await resolveExecutablePath(request);
+    if (!launch.ok) return launch;
+    if (!isAllowedExecutable(launch.value)) {
       return err(
         nexusError('E_INVALID_INPUT', `executable is not on the NEXUS allowlist: ${request.file}`, {
           file: request.file,
@@ -128,7 +155,7 @@ export class NodeCommandRunner implements CommandRunner {
     return new Promise<Result<CommandResult, NexusError>>((resolve) => {
       let child;
       try {
-        child = spawn(request.file, [...request.args], {
+        child = spawn(launch.value, [...request.args], {
           // Never `shell: true`.
           shell: false,
           windowsHide: true,
@@ -198,6 +225,55 @@ export class NodeCommandRunner implements CommandRunner {
   }
 }
 
+
+async function resolveExecutablePath(request: CommandRequest): Promise<Result<string, NexusError>> {
+  const absolute = path.isAbsolute(request.file);
+  if (request.requireAbsolutePath && !absolute) {
+    return err(nexusError('E_INVALID_INPUT', 'this executable must be supplied as an absolute path; PATH lookup is forbidden'));
+  }
+
+  if (!absolute && process.platform === 'win32') {
+    const systemPath = resolveTrustedSystemExecutable(request.file);
+    if (systemPath) return ok(systemPath);
+    // Third-party / helper binaries must never be allowed to fall through to PATH.
+    if (isAllowedExecutable(request.file)) {
+      return err(nexusError('E_INVALID_INPUT', 'non-system Windows executables must use an explicit absolute trusted path'));
+    }
+  }
+
+  if (request.expectedSha256 !== undefined) {
+    if (!absolute) {
+      return err(nexusError('E_INVALID_INPUT', 'an executable checksum can only be pinned to an absolute path'));
+    }
+    if (!/^[a-fA-F0-9]{64}$/.test(request.expectedSha256)) {
+      return err(nexusError('E_INVALID_INPUT', 'executable checksum must be a SHA-256 hex digest'));
+    }
+    let resolved: string;
+    try {
+      resolved = await realpath(request.file);
+    } catch (error) {
+      return err(toNexusError(error, 'E_UNAVAILABLE'));
+    }
+    let digest: string;
+    try {
+      digest = createHash('sha256').update(await readFile(resolved)).digest('hex');
+    } catch (error) {
+      return err(toNexusError(error, 'E_IO'));
+    }
+    if (digest.toLowerCase() !== request.expectedSha256.toLowerCase()) {
+      return err(
+        nexusError(
+          'E_VERIFY_FAILED',
+          'executable checksum did not match the configured trust pin',
+          { file: resolved },
+        ),
+      );
+    }
+    return ok(resolved);
+  }
+
+  return ok(request.file);
+}
 /**
  * A minimal environment for children. Inheriting the full parent environment
  * would leak whatever the user has in it into subprocess output and crash

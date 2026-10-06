@@ -100,6 +100,8 @@ const configSchema = vObject({
   vesper: vOptional(
     vObject({
       enabled: vOptional(vBoolean()),
+      /** Explicit legacy Windows named pipe. Omit to use the token-bound secure default. */
+      pipeName: vOptional(vString({ maxLength: 256, pattern: /^\\\\\.\\pipe\\[A-Za-z0-9._-]+$/ })),
       /** Scopes granted to an authenticated Vesper client. */
       scopes: vOptional(vArray(vString({ maxLength: 64 }), { maxItems: 32 })),
     }),
@@ -109,6 +111,17 @@ const configSchema = vObject({
       /** Name of a built-in fixture, or a path to one. Development use. */
       hardwareFixture: vOptional(vString({ maxLength: 512 })),
       telemetry: vOptional(vBoolean()),
+    }),
+  ),
+  /** Third-party observation tools are never resolved through PATH. */
+  tools: vOptional(
+    vObject({
+      presentMonPath: vOptional(vString({ maxLength: 1024, pattern: /^[A-Za-z]:[\\/]/ })),
+      presentMonSha256: vOptional(vString({ maxLength: 64, pattern: /^[a-fA-F0-9]{64}$/ })),
+      coreInfoPath: vOptional(vString({ maxLength: 1024, pattern: /^[A-Za-z]:[\\/]/ })),
+      coreInfoSha256: vOptional(vString({ maxLength: 64, pattern: /^[a-fA-F0-9]{64}$/ })),
+      nativeHelperPath: vOptional(vString({ maxLength: 1024, pattern: /^[A-Za-z]:[\\/]/ })),
+      nativeHelperSha256: vOptional(vString({ maxLength: 64, pattern: /^[a-fA-F0-9]{64}$/ })),
     }),
   ),
   policy: vOptional(policyOverrideSchema),
@@ -125,11 +138,20 @@ export interface NexusConfig {
   };
   readonly vesper: {
     readonly enabled: boolean;
+    readonly pipeName: string | null;
     readonly scopes: readonly string[];
   };
   readonly simulate: {
     readonly hardwareFixture: string | null;
     readonly telemetry: boolean;
+  };
+  readonly tools: {
+    readonly presentMonPath: string | null;
+    readonly presentMonSha256: string | null;
+    readonly coreInfoPath: string | null;
+    readonly coreInfoSha256: string | null;
+    readonly nativeHelperPath: string | null;
+    readonly nativeHelperSha256: string | null;
   };
   readonly policy: PolicyOverride | undefined;
 }
@@ -146,9 +168,18 @@ export const DEFAULT_CONFIG: NexusConfig = Object.freeze({
   }),
   vesper: Object.freeze({
     enabled: false,
+    pipeName: null,
     scopes: Object.freeze(['status', 'telemetry', 'capabilities', 'workload', 'recommend']),
   }),
   simulate: Object.freeze({ hardwareFixture: null, telemetry: false }),
+  tools: Object.freeze({
+    presentMonPath: null,
+    presentMonSha256: null,
+    coreInfoPath: null,
+    coreInfoSha256: null,
+    nativeHelperPath: null,
+    nativeHelperSha256: null,
+  }),
   policy: undefined,
 });
 
@@ -183,11 +214,20 @@ export async function loadConfig(paths: NexusPaths): Promise<Result<NexusConfig,
     telemetry,
     vesper: {
       enabled: raw.vesper?.enabled ?? DEFAULT_CONFIG.vesper.enabled,
+      pipeName: raw.vesper?.pipeName ?? null,
       scopes: raw.vesper?.scopes ?? DEFAULT_CONFIG.vesper.scopes,
     },
     simulate: {
       hardwareFixture: raw.simulate?.hardwareFixture ?? null,
       telemetry: raw.simulate?.telemetry ?? false,
+    },
+    tools: {
+      presentMonPath: raw.tools?.presentMonPath ?? null,
+      presentMonSha256: raw.tools?.presentMonSha256 ?? null,
+      coreInfoPath: raw.tools?.coreInfoPath ?? null,
+      coreInfoSha256: raw.tools?.coreInfoSha256 ?? null,
+      nativeHelperPath: raw.tools?.nativeHelperPath ?? null,
+      nativeHelperSha256: raw.tools?.nativeHelperSha256 ?? null,
     },
     policy: normalisePolicyOverride(raw.policy),
   });
@@ -206,12 +246,24 @@ export function serializeConfig(config: NexusConfig): Record<string, unknown> {
     mode: config.mode,
     logLevel: config.logLevel,
     telemetry: { ...config.telemetry },
-    vesper: { enabled: config.vesper.enabled, scopes: [...config.vesper.scopes] },
+    vesper: {
+      enabled: config.vesper.enabled,
+      ...(config.vesper.pipeName === null ? {} : { pipeName: config.vesper.pipeName }),
+      scopes: [...config.vesper.scopes],
+    },
     simulate: {
       ...(config.simulate.hardwareFixture === null
         ? {}
         : { hardwareFixture: config.simulate.hardwareFixture }),
       telemetry: config.simulate.telemetry,
+    },
+    tools: {
+      ...(config.tools.presentMonPath === null ? {} : { presentMonPath: config.tools.presentMonPath }),
+      ...(config.tools.presentMonSha256 === null ? {} : { presentMonSha256: config.tools.presentMonSha256 }),
+      ...(config.tools.coreInfoPath === null ? {} : { coreInfoPath: config.tools.coreInfoPath }),
+      ...(config.tools.coreInfoSha256 === null ? {} : { coreInfoSha256: config.tools.coreInfoSha256 }),
+      ...(config.tools.nativeHelperPath === null ? {} : { nativeHelperPath: config.tools.nativeHelperPath }),
+      ...(config.tools.nativeHelperSha256 === null ? {} : { nativeHelperSha256: config.tools.nativeHelperSha256 }),
     },
     ...(config.policy === undefined ? {} : { policy: config.policy }),
   };

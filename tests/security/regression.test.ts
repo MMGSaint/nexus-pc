@@ -451,6 +451,27 @@ describe('process execution is confined', () => {
     expect(result.ok).toBe(false);
   });
 
+  it('refuses third-party helpers unless an absolute trusted path is supplied', async () => {
+    const result = await new NodeCommandRunner().run({
+      file: 'presentmon.exe',
+      args: [],
+      requireAbsolutePath: true,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('E_INVALID_INPUT');
+  });
+
+  it('refuses malformed executable trust pins before launch', async () => {
+    const result = await new NodeCommandRunner().run({
+      file: 'C:\\Program Files\\PresentMon\\PresentMon.exe',
+      args: [],
+      requireAbsolutePath: true,
+      expectedSha256: 'not-a-sha256',
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('E_INVALID_INPUT');
+  });
+
   it('never uses a shell', async () => {
     const source = await readFile(path.join(process.cwd(), 'src/core/exec.ts'), 'utf8');
     expect(source).toContain('shell: false');
@@ -463,6 +484,22 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 }
 
+describe('sensitive process launches stay behind the hardened boundary', () => {
+  it('keeps direct child_process imports constrained', async () => {
+    const files = await readdir(path.join(process.cwd(), 'src'), { withFileTypes: true });
+    expect(files.length).toBeGreaterThan(0);
+    const execSource = await readFile(path.join(process.cwd(), 'src/core/exec.ts'), 'utf8');
+    expect(execSource).toContain("from 'node:child_process'");
+
+    const forbidden = execSource.replace("from 'node:child_process'", "");
+    expect(forbidden).not.toContain("node:child_process");
+    // The persistent shell receives an injected spawn function for testability, but
+    // must never introduce its own node child_process import.
+    const persistent = await readFile(path.join(process.cwd(), 'src/core/persistent-shell.ts'), 'utf8');
+    expect(persistent).not.toContain("node:child_process");
+  });
+});
+ 
 describe('no network listener exists anywhere in the source', () => {
   async function walk(dir: string): Promise<string[]> {
     const out: string[] = [];

@@ -9,7 +9,6 @@
  */
 
 import type { CommandRunner } from '../core/exec.js';
-import { runPowerShell } from '../core/exec.js';
 import { nexusError, type NexusError } from '../core/errors.js';
 import type { Result } from '../core/result.js';
 import { err, ok } from '../core/result.js';
@@ -29,12 +28,6 @@ export interface X3dTopology {
   readonly standardCacheDomain: CacheDomain | null;
   readonly detail: string;
 }
-
-const COREINFO_SCRIPT = String.raw`
-$coreInfo = Get-Command coreinfo.exe -ErrorAction SilentlyContinue
-if (-not $coreInfo) { throw 'Coreinfo.exe is not installed or is not on PATH.' }
-& $coreInfo.Source -l
-`;
 
 function parseSizeBytes(value: string): number | null {
   const match = /^([0-9]+(?:\.[0-9]+)?)\s*(KB|MB|GB)$/i.exec(value.trim());
@@ -104,8 +97,21 @@ export function parseCoreinfoCacheOutput(stdout: string): X3dTopology {
   };
 }
 
-export async function probeCoreinfoTopology(runner: CommandRunner): Promise<Result<X3dTopology, NexusError>> {
-  const result = await runPowerShell(runner, COREINFO_SCRIPT, { timeoutMs: 10_000 });
+export async function probeCoreinfoTopology(
+  runner: CommandRunner,
+  executablePath?: string | null,
+  executableSha256?: string | null,
+): Promise<Result<X3dTopology, NexusError>> {
+  if (!executablePath || !executableSha256) {
+    return err(nexusError('E_UNAVAILABLE', 'Coreinfo is not configured with an absolute executable path and SHA-256 trust pin.'));
+  }
+  const result = await runner.run({
+    file: executablePath,
+    args: ['-l'],
+    timeoutMs: 10_000,
+    requireAbsolutePath: true,
+    expectedSha256: executableSha256,
+  });
   if (!result.ok) return err(result.error);
   if (result.value.code !== 0) {
     return err(nexusError('E_UNAVAILABLE', `Coreinfo topology probe failed: ${result.value.stderr.trim() || 'unknown error'}`));

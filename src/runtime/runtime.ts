@@ -19,7 +19,7 @@ import type { CommandRunner } from '../core/exec.js';
 import { NodeCommandRunner } from '../core/exec.js';
 import type { NexusError } from '../core/errors.js';
 import { nexusError, toNexusError } from '../core/errors.js';
-import type { Fidelity } from '../core/fidelity.js';
+import { combineFidelity, type Fidelity } from '../core/fidelity.js';
 import type { IdSource } from '../core/ids.js';
 import { systemIds } from '../core/ids.js';
 import type { Logger } from '../core/logger.js';
@@ -177,7 +177,12 @@ export class NexusRuntime implements VesperHost {
     this.ids = options.ids ?? systemIds;
     this.runner = options.runner ?? new NodeCommandRunner();
     this.platform = options.platform ?? process.platform;
-    this.presentMon = new PresentMonCollector({ runner: this.runner, paths: options.paths });
+    this.presentMon = new PresentMonCollector({
+      runner: this.runner,
+      paths: options.paths,
+      executablePath: options.config.tools.presentMonPath,
+      executableSha256: options.config.tools.presentMonSha256,
+    });
     this.powerSandbox = new WindowsPowerPlanSandbox(this.runner, 15_000, options.paths);
     this.experimentStore = new ExperimentStore(options.paths, this.clock, this.logger);
     this.processEnumerator = createProcessEnumerator({
@@ -530,6 +535,8 @@ export class NexusRuntime implements VesperHost {
       await this.stages.run('vesper', async () => {
       const token = await ensureToken(this.options.paths, this.ids);
       if (!token.ok) throw token.error;
+      const explicitPipe = this.platform === 'win32' ? this.options.config.vesper.pipeName : null;
+      const endpoint = explicitPipe ?? ipcEndpointForToken(this.options.paths, token.value, this.platform);
       const server = new VesperServer({
         paths: this.options.paths,
         clock: this.clock,
@@ -539,6 +546,7 @@ export class NexusRuntime implements VesperHost {
         scopes: this.options.config.vesper.scopes,
         host: this,
         platform: this.platform,
+        endpoint,
       });
       const started = await server.start();
       if (!started.ok) throw started.error;
@@ -1048,7 +1056,19 @@ export class NexusRuntime implements VesperHost {
       ? APPLICATION_HINTS[applicationId]
       : Object.values(APPLICATION_HINTS).flat();
     const foreground = this.platform === 'win32'
-      ? await getForegroundProcess(this.runner).catch(() => null)
+      ? await getForegroundProcess(
+          this.runner,
+          this.options.config.tools.nativeHelperPath === null
+            ? (this.options.config.tools.nativeHelperSha256 === null
+                ? undefined
+                : { expectedSha256: this.options.config.tools.nativeHelperSha256 })
+            : {
+                executable: this.options.config.tools.nativeHelperPath,
+                ...(this.options.config.tools.nativeHelperSha256 === null
+                  ? {}
+                  : { expectedSha256: this.options.config.tools.nativeHelperSha256 }),
+              },
+        ).catch(() => null)
       : null;
     const foregroundPid = foreground?.ok && foreground.value.available ? foreground.value.pid : null;
 
@@ -1133,7 +1153,20 @@ export class NexusRuntime implements VesperHost {
     if (this.platform !== 'win32') {
       return { available: false, platform: this.platform, detail: 'Windows topology evidence is not currently available on this platform.' };
     }
-    const native = await import('../process/windows-native.js').then((module) => module.getSystemCpuSets(this.runner));
+    const helperOptions =
+      this.options.config.tools.nativeHelperPath === null
+        ? (this.options.config.tools.nativeHelperSha256 === null
+            ? undefined
+            : { expectedSha256: this.options.config.tools.nativeHelperSha256 })
+        : {
+            executable: this.options.config.tools.nativeHelperPath,
+            ...(this.options.config.tools.nativeHelperSha256 === null
+              ? {}
+              : { expectedSha256: this.options.config.tools.nativeHelperSha256 }),
+          };
+    const native = await import('../process/windows-native.js').then((module) =>
+      module.getSystemCpuSets(this.runner, helperOptions),
+    );
     if (!native.ok) {
       return { available: false, platform: this.platform, detail: native.error.message, fidelity: 'unavailable' };
     }
@@ -1165,6 +1198,7 @@ export class NexusRuntime implements VesperHost {
     if (!/^[a-z0-9._-]{1,63}$/.test(applicationId)) {
       return {
         status: 'blocked',
+        fidelity: 'unavailable',
         applicationId,
         fingerprint: null,
         candidates: [],
@@ -1180,6 +1214,7 @@ export class NexusRuntime implements VesperHost {
     if (this.options.config.mode === 'observation' || this.runState === 'observation_only') {
       return {
         status: 'blocked',
+        fidelity: 'unavailable',
         applicationId,
         fingerprint: null,
         candidates: [],
@@ -1197,6 +1232,7 @@ export class NexusRuntime implements VesperHost {
     if (this.platform !== 'win32') {
       return {
         status: 'blocked',
+        fidelity: 'unavailable',
         applicationId,
         fingerprint: null,
         candidates: [],
@@ -1214,6 +1250,7 @@ export class NexusRuntime implements VesperHost {
     if (!inventory || !specialization.x3dSchedulingSensitive) {
       return {
         status: 'blocked',
+        fidelity: 'unavailable',
         applicationId,
         fingerprint: null,
         candidates: [],
@@ -1233,6 +1270,7 @@ export class NexusRuntime implements VesperHost {
     if (!target || !foreground?.ok || foreground.value.pid !== target.processId) {
       return {
         status: 'blocked',
+        fidelity: 'unavailable',
         applicationId,
         fingerprint: null,
         candidates: [],
@@ -1250,6 +1288,7 @@ export class NexusRuntime implements VesperHost {
       if (!baseline.ok) {
         return {
           status: 'failed',
+        fidelity: 'unavailable',
           applicationId,
           fingerprint: null,
           candidates: [],
@@ -1280,6 +1319,7 @@ export class NexusRuntime implements VesperHost {
     const candidates = makeCandidateGrid(dimensions, Math.max(2, Math.min(8, request.maxCandidates ?? 6)));
     const repetitions = Math.max(2, Math.min(4, Math.floor(request.repetitions ?? 3)));
     const trials: ExperimentTrialSummary[] = [];
+    let experimentFidelity: Fidelity = 'unavailable';
 
     const scoreFor = (outcome: OptimizationOutcome) => frameScorePercent(outcome.measurements);
 
@@ -1300,11 +1340,22 @@ export class NexusRuntime implements VesperHost {
         });
 
         outcomeIds.push(outcome.id);
+        experimentFidelity = combineFidelity(experimentFidelity, outcome.fidelity);
         const score = scoreFor(outcome);
         if (score) deltas.push(score.deltaPercent);
         stabilityRegression ||= outcome.stabilityRegression === true;
 
-        if (outcome.status === 'applied_unverified' || stabilityRegression || this.runState === 'observation_only') {
+        if (outcome.status === 'applied_unverified') {
+          this.runState = 'observation_only';
+          await this.eventLog.append({
+            kind: 'experiment.aborted',
+            severity: 'critical',
+            message: 'Private tuner aborted after an incomplete rollback; no further candidates will be applied.',
+            data: { applicationId, candidateId: candidate.id, outcomeId: outcome.id },
+          });
+          break;
+        }
+        if (stabilityRegression || this.runState === 'observation_only') {
           break;
         }
       }
@@ -1342,6 +1393,22 @@ export class NexusRuntime implements VesperHost {
       });
 
       if (stabilityRegression || this.runState === 'observation_only') break;
+    }
+
+    if (this.runState === 'observation_only') {
+      return {
+        fidelity: experimentFidelity,
+        status: 'inconclusive',
+        applicationId,
+        fingerprint,
+        candidates,
+        trials,
+        winner: null,
+        scoreMetric: 'frame.1pct_low',
+        score: decideExperiment([]).score,
+        finalOutcomeId: null,
+        detail: 'Private tuner aborted after machine-state uncertainty; no winner was selected or re-applied.',
+      };
     }
 
     const viable = trials
@@ -1390,6 +1457,7 @@ export class NexusRuntime implements VesperHost {
         sandboxPowerPlanName: `NEXUS ${applicationId}`,
       });
       finalOutcomeId = finalOutcome.id;
+      experimentFidelity = combineFidelity(experimentFidelity, finalOutcome.fidelity);
       if (finalOutcome.status !== 'applied_kept') {
         // A candidate can win the multi-trial comparison and still fail the final
         // confirmation window. Conservatively report that no durable change won.
@@ -1408,6 +1476,7 @@ export class NexusRuntime implements VesperHost {
         await this.experimentStore.save(record);
         return {
           status: 'inconclusive',
+          fidelity: experimentFidelity,
           applicationId,
           fingerprint,
           candidates,
@@ -1460,6 +1529,7 @@ export class NexusRuntime implements VesperHost {
     });
 
     return {
+      fidelity: experimentFidelity,
       status: finalStatus,
       applicationId,
       fingerprint,
@@ -1767,14 +1837,23 @@ export class NexusRuntime implements VesperHost {
       if (outcome.status === 'applied_kept') {
         const named = await this.powerSandbox.keep(powerWorkspace, request.sandboxPowerPlanName ?? `NEXUS ${workload.workload}`);
         if (!named.ok) {
-          this.degrade(`Power-plan sandboxed experiment was kept but could not be named: ${named.error.message}`);
+          this.degrade(`Power-plan sandbox commit failed: ${named.error.message}`);
+          this.runState = 'observation_only';
+          outcome = {
+            ...outcome,
+            status: 'applied_unverified',
+            rolledBack: false,
+            summary: `${outcome.summary} The isolated winner could not be durably committed; NEXUS has quarantined further writes.`,
+            finishedAtMs: this.clock.now(),
+          };
+        } else {
+          await this.eventLog.append({
+            kind: 'power.sandbox.kept',
+            severity: 'notice',
+            message: `kept isolated power scheme ${powerWorkspace.sandboxGuid} active after a measured experiment`,
+            data: { sandboxGuid: powerWorkspace.sandboxGuid, originalGuid: powerWorkspace.originalGuid },
+          });
         }
-        await this.eventLog.append({
-          kind: 'power.sandbox.kept',
-          severity: 'notice',
-          message: `kept isolated power scheme ${powerWorkspace.sandboxGuid} active after a measured experiment`,
-          data: { sandboxGuid: powerWorkspace.sandboxGuid, originalGuid: powerWorkspace.originalGuid },
-        });
       } else {
         const restored = await this.powerSandbox.restore(powerWorkspace);
         if (!restored.ok) {
@@ -1913,7 +1992,11 @@ export class NexusRuntime implements VesperHost {
     if (this.platform !== 'win32') {
       return { ok: false as const, error: nexusError('E_UNSUPPORTED', 'X3D topology probing is currently Windows-only') };
     }
-    return probeCoreinfoTopology(this.runner);
+    return probeCoreinfoTopology(
+      this.runner,
+      this.options.config.tools.coreInfoPath,
+      this.options.config.tools.coreInfoSha256,
+    );
   }
 
   get capabilityRegistry(): CapabilityRegistry {
