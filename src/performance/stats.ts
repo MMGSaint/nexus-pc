@@ -33,6 +33,8 @@ export interface FramePerformanceSummary {
   readonly displayIntervalMs: number | null;
   readonly displayedFps: number | null;
   readonly presentedFps: number | null;
+  readonly applicationFrameCount: number;
+  readonly applicationFps: number | null;
   readonly displayLatencyP95Ms: number | null;
   readonly generatedFrameCount: number;
   readonly generatedFrameFraction: number | null;
@@ -99,6 +101,8 @@ export function summarizeFrames(samples: readonly FrameSample[]): FramePerforman
   const latencies = samples.map((s) => s.displayLatencyMs).filter((v): v is number => v !== undefined && Number.isFinite(v) && v >= 0);
   const generated = samples.filter((s) => s.frameType === 'amd_afmf' || s.frameType === 'intel_xefg').length;
   const afmf = samples.filter((s) => s.frameType === 'amd_afmf').length;
+  const applicationSamples = samples.filter((s) => s.frameType === undefined || s.frameType === 'unknown' || s.frameType === 'application');
+  const applicationTimes = applicationSamples.map((s) => s.frameTimeMs).filter((v) => Number.isFinite(v) && v > 0);
 
   return {
     sampleCount: frameTimes.length,
@@ -114,6 +118,8 @@ export function summarizeFrames(samples: readonly FrameSample[]): FramePerforman
     displayIntervalMs: mean(displayIntervals),
     displayedFps: (() => { const m = mean(displayIntervals); return m && m > 0 ? 1000 / m : null; })(),
     presentedFps: (() => { const m = mean(presentIntervals); return m && m > 0 ? 1000 / m : null; })(),
+    applicationFrameCount: applicationTimes.length,
+    applicationFps: (() => { const m = mean(applicationTimes); return m && m > 0 ? 1000 / m : null; })(),
     displayLatencyP95Ms: percentile(latencies, 0.95),
     generatedFrameCount: generated,
     generatedFrameFraction: samples.length > 0 ? generated / samples.length : null,
