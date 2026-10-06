@@ -71,10 +71,32 @@ export function requireFrameBenefit(
   const droppedRegression = before.summary.droppedFramesKnown && after.summary.droppedFramesKnown && after.summary.droppedFrames > before.summary.droppedFrames;
   const latencyRegression = before.summary.displayLatencyP95Ms !== null && after.summary.displayLatencyP95Ms !== null && after.summary.displayLatencyP95Ms > before.summary.displayLatencyP95Ms * 1.1;
   if (droppedRegression || latencyRegression || score <= -Math.abs(p.maxRegressionPercent)) {
-    return { decision: 'regression', scorePercent: score, reason: droppedRegression ? 'Dropped frames increased after the change.' : 'Composite frame-quality score regressed by ' + score.toFixed(2) + '%.' };
+    return {
+      decision: 'regression',
+      scorePercent: score,
+      reason: droppedRegression
+        ? 'Dropped frames increased after the change.'
+        : latencyRegression
+          ? '95th-percentile display latency increased by more than 10%.'
+          : 'Composite frame-quality score regressed by ' + score.toFixed(2) + '%.',
+    };
   }
-  if (score >= Math.abs(p.minImprovementPercent)) return { decision: 'benefit', scorePercent: score, reason: 'Composite frame-quality score improved by ' + score.toFixed(2) + '%.' };
-  return { decision: 'no_measurable_benefit', scorePercent: score, reason: 'Composite frame-quality change was only ' + score.toFixed(2) + '%, below the ' + p.minImprovementPercent + '% benefit floor.' };
+  if (score >= Math.abs(p.minImprovementPercent)) {
+    return {
+      decision: 'benefit',
+      scorePercent: score,
+      reason: generationChanged
+        ? 'Frame quality improved by ' + score.toFixed(2) + '%, with native application performance included because frame-generation mix changed.'
+        : 'Composite frame-quality score improved by ' + score.toFixed(2) + '%.',
+    };
+  }
+  return {
+    decision: 'no_measurable_benefit',
+    scorePercent: score,
+    reason: generationChanged
+      ? 'Frame-generation mix changed materially; native application performance did not clear the benefit floor.'
+      : 'Composite frame-quality change was only ' + score.toFixed(2) + '%, below the ' + p.minImprovementPercent + '% benefit floor.',
+  };
 }
 
 /** Convert PresentMon evidence into the NEXUS telemetry vocabulary. */
@@ -87,7 +109,7 @@ export function frameTruthReadings(truth: FrameTruth): readonly Reading[] {
     confidence: truth.fidelity === 'live' ? 1 : 0.5,
   } as const;
 
-  const values: Array<readonly ['frame.time' | 'frame.fps' | 'frame.1pct_low' | 'frame.0_1pct_low' | 'frame.time.p95' | 'frame.time.p99' | 'frame.time.stddev' | 'frame.dropped', number]> = [
+  const values: Array<readonly ['frame.time' | 'frame.fps' | 'frame.1pct_low' | 'frame.0_1pct_low' | 'frame.time.p95' | 'frame.time.p99' | 'frame.time.stddev' | 'frame.displayed_fps' | 'frame.presented_fps' | 'frame.application_fps' | 'frame.generated_fraction' | 'frame.afmf_generated' | 'frame.display_latency.p95' | 'frame.dropped', number]> = [
     ['frame.time', s.averageFrameTimeMs],
     ['frame.fps', s.fps],
     ['frame.1pct_low', s.fps1PercentLow],
@@ -95,6 +117,12 @@ export function frameTruthReadings(truth: FrameTruth): readonly Reading[] {
     ['frame.time.p95', s.p95FrameTimeMs],
     ['frame.time.p99', s.p99FrameTimeMs],
     ['frame.time.stddev', s.frameTimeStdDevMs],
+    ['frame.displayed_fps', s.displayedFps],
+    ['frame.presented_fps', s.presentedFps],
+    ['frame.application_fps', s.applicationFps],
+    ['frame.generated_fraction', s.generatedFrameFraction],
+    ['frame.afmf_generated', s.afmfFrameCount],
+    ['frame.display_latency.p95', s.displayLatencyP95Ms],
     ['frame.dropped', s.droppedFrames],
   ];
   return values
