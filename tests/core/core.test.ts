@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { canonicalJson, structurallyEqual } from '../../src/core/canonical-json.js';
+import { resolveTrustedSystemExecutable } from '../../src/core/exec.js';
 import { FixedClock, isoFrom } from '../../src/core/clock.js';
 import { combineFidelity, canJustifyHardwareChange, isLive, FIDELITIES } from '../../src/core/fidelity.js';
 import { atomicWrite, readJson, writeJson } from '../../src/core/fsx.js';
@@ -199,6 +200,20 @@ describe('redaction', () => {
     registerSecret('abc');
     expect(scrubString('abc def')).toBe('abc def');
     clearRegisteredSecrets();
+  });
+});
+
+describe('trusted system executable resolution', () => {
+  it('uses the actual Windows PowerShell 5.1 install path', () => {
+    expect(
+      resolveTrustedSystemExecutable('powershell.exe', 'win32', 'D:\\Windows'),
+    ).toBe(path.win32.join('D:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
+
+    expect(
+      resolveTrustedSystemExecutable('powercfg.exe', 'win32', 'D:\\Windows'),
+    ).toBe(path.win32.join('D:\\Windows', 'System32', 'powercfg.exe'));
+
+    expect(resolveTrustedSystemExecutable('powershell.exe', 'linux', '/usr')).toBeNull();
   });
 });
 
