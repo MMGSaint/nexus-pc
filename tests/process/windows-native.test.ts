@@ -4,11 +4,22 @@ import { commandOk, ScriptedCommandRunner } from '../../src/core/exec.js';
 import { getForegroundProcess, getSystemCpuSets, setProcessDefaultCpuSets } from '../../src/process/windows-native.js';
 import { WindowsProcessPlacementController } from '../../src/process/placement.js';
 
+const HELPER = 'C:\\NEXUS\\native-windows-helper.exe';
+
 describe('native Windows bridge', () => {
+  it('fails closed without an explicitly configured helper path on Windows', async () => {
+    const runner = new ScriptedCommandRunner();
+    const result = await getForegroundProcess(runner, { executable: HELPER });
+    if (process.platform === 'win32') {
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('E_UNAVAILABLE');
+      expect(runner.requests).toHaveLength(0);
+    }
+  });
   it('parses a foreground response from the bounded helper', async () => {
     const runner = new ScriptedCommandRunner([
       {
-        match: r => r.file === 'nexus-native-helper.exe' && r.args.length === 0,
+        match: r => r.file === HELPER && r.args.length === 0,
         result: commandOk(JSON.stringify({
           ok: true,
           result: { available: true, pid: 4242, processName: 'SquadGame.exe' },
@@ -25,7 +36,7 @@ describe('native Windows bridge', () => {
   it('parses CPU Sets and rejects malformed entries rather than guessing', async () => {
     const runner = new ScriptedCommandRunner([
       {
-        match: r => r.file === 'nexus-native-helper.exe',
+        match: r => r.file === HELPER,
         result: commandOk(JSON.stringify({
           ok: true,
           result: [
@@ -36,7 +47,7 @@ describe('native Windows bridge', () => {
         })),
       },
     ]);
-    const result = await getSystemCpuSets(runner);
+    const result = await getSystemCpuSets(runner, { executable: HELPER });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value).toHaveLength(2);
@@ -49,7 +60,7 @@ describe('WindowsProcessPlacementController', () => {
     let calls = 0;
     const runner = new ScriptedCommandRunner([
       {
-        match: r => r.file === 'nexus-native-helper.exe',
+        match: r => r.file === HELPER,
         result: commandOk(
           ++calls === 1
             ? JSON.stringify({ ok: true, result: { pid: 99, ids: [], explicitlyAssigned: false } })
@@ -77,21 +88,21 @@ describe('CPU Set safety helpers', () => {
   it('allows CPU Set ID zero because Windows IDs are opaque', async () => {
     const runner = new ScriptedCommandRunner([
       {
-        match: r => r.file === 'nexus-native-helper.exe',
+        match: r => r.file === HELPER,
         result: commandOk(JSON.stringify({
           ok: true,
           result: { pid: 1, ids: [0], explicitlyAssigned: true },
         })),
       },
       {
-        match: r => r.file === 'nexus-native-helper.exe',
+        match: r => r.file === HELPER,
         result: commandOk(JSON.stringify({
           ok: true,
           result: { pid: 1, ids: [0], explicitlyAssigned: true },
         })),
       },
     ]);
-    const result = await setProcessDefaultCpuSets(runner, 1, [0]);
+    const result = await setProcessDefaultCpuSets(runner, 1, [0], { executable: HELPER });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.ids).toEqual([0]);
