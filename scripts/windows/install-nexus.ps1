@@ -49,17 +49,43 @@ param(
     [switch]$Elevated,
     [string]$TaskName = 'NEXUS',
     [string]$NodePath = '',
-    [int]$Delay = 30
+    [int]$Delay = 30,
+    [string]$InstallRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$entryPoint = Join-Path $repoRoot 'dist\cli\main.js'
-
-if (-not (Test-Path $entryPoint)) {
-    throw "NEXUS is not built. Run 'npm run build' in $repoRoot first (expected $entryPoint)."
+$installRootResolved = if ([string]::IsNullOrWhiteSpace($InstallRoot)) {
+    if ($Elevated) { Join-Path $env:ProgramFiles 'NEXUS' } else { $repoRoot }
+} else {
+    [System.IO.Path]::GetFullPath($InstallRoot)
 }
+
+if ($Elevated) {
+    $programFiles = [System.IO.Path]::GetFullPath($env:ProgramFiles)
+    if (-not $installRootResolved.StartsWith($programFiles, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Elevated NEXUS installs must live under $programFiles so the scheduled task cannot execute from a user-writable checkout."
+    }
+}
+
+$sourceEntryPoint = Join-Path $repoRoot 'dist\cli\main.js'
+
+if (-not (Test-Path $sourceEntryPoint)) {
+    throw "NEXUS is not built. Run 'npm run build' in $repoRoot first (expected $sourceEntryPoint)."
+}
+
+if ($Elevated) {
+    # Never point a highest-privilege task at the developer checkout. A normal user
+    # can usually modify that tree, turning the next logon into elevated code execution.
+    New-Item -ItemType Directory -Path $installRootResolved -Force | Out-Null
+    $targetDist = Join-Path $installRootResolved 'dist'
+    if (Test-Path $targetDist) { Remove-Item $targetDist -Recurse -Force }
+    Copy-Item (Join-Path $repoRoot 'dist') $targetDist -Recurse -Force
+    Copy-Item (Join-Path $repoRoot 'package.json') (Join-Path $installRootResolved 'package.json') -Force
+}
+
+$entryPoint = Join-Path $installRootResolved 'dist\cli\main.js'
 
 if ([string]::IsNullOrWhiteSpace($NodePath)) {
     $node = Get-Command node -ErrorAction SilentlyContinue
@@ -77,7 +103,7 @@ if ($Elevated) {
     }
 }
 
-$action = New-ScheduledTaskAction -Execute $NodePath -Argument "`"$entryPoint`" run" -WorkingDirectory $repoRoot
+$action = New-ScheduledTaskAction -Execute $NodePath -Argument "`"$entryPoint`" run" -WorkingDirectory $installRootResolved
 
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $trigger.Delay = "PT$($Delay)S"
@@ -100,6 +126,7 @@ $description = @"
 NEXUS PC performance and hardware specialist. Starts at logon, observes the
 machine, and applies optimizations only within its built-in safety policy.
 Registered by install-nexus.ps1 at $runLevel privilege.
+Runtime files: $installRootResolved
 "@
 
 Register-ScheduledTask `
@@ -114,9 +141,13 @@ Register-ScheduledTask `
 Write-Host "Registered scheduled task '$TaskName'."
 Write-Host "  Runs:       $NodePath `"$entryPoint`" run"
 Write-Host "  Privilege:  $runLevel"
+Write-Host "  Runtime:    $installRootResolved"
 Write-Host "  Trigger:    at logon for $env:USERNAME, after ${Delay}s"
 Write-Host ''
 Write-Host 'NEXUS starts in observation mode: it measures and reports, and changes nothing.'
+if ($Elevated) {
+    Write-Host '  Elevated runtime was copied to Program Files so the logon task does not execute the development checkout.'
+}
 Write-Host 'Run "node dist\cli\main.js first-pc" to validate this machine before enabling changes.'
 Write-Host 'Remove with uninstall-nexus.ps1.'
 
