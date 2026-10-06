@@ -7,7 +7,7 @@
  */
 
 import type { CommandRunner } from '../core/exec.js';
-import type { NexusError } from '../core/errors.js';
+import { nexusError, type NexusError } from '../core/errors.js';
 import { err, ok } from '../core/result.js';
 import type { Result } from '../core/result.js';
 import { runPowerShell, parsePowerShellJson } from '../core/exec.js';
@@ -56,11 +56,7 @@ export async function captureWindowsStability(
   nowMs = Date.now(),
 ): Promise<Result<StabilitySnapshot, NexusError>> {
   if (!Number.isFinite(sinceMs)) {
-    return err({
-      code: 'E_INVALID_INPUT',
-      message: 'stability oracle requires a finite start timestamp',
-      retryable: false,
-    } as NexusError);
+    return err(nexusError('E_INVALID_INPUT', 'stability oracle requires a finite start timestamp'));
   }
   const result = await runPowerShell(runner, SCRIPT, {
     timeoutMs: 15_000,
