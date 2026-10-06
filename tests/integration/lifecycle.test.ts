@@ -53,7 +53,8 @@ async function boot(home: string, cfg: NexusConfig = config()): Promise<NexusRun
     logger,
     ids: new SequentialIds(),
     runner: new ScriptedCommandRunner(),
-    platform: 'linux',
+    // Use the real test-host transport so Windows CI exercises named-pipe locking.
+    platform: process.platform,
     wait: async () => undefined,
   });
   const started = await runtime.start();
