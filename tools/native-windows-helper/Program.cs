@@ -219,7 +219,7 @@ internal static class Program
     private static object GetDefaultCpuSets(int pid)
     {
         using var handle = OpenProcessHandle(pid, ProcessQueryLimitedInformation);
-        if (!GetProcessDefaultCpuSets(handle, IntPtr.Zero, 0, out var required) && required == 0)
+        if (!GetProcessDefaultCpuSets(handle.Handle, IntPtr.Zero, 0, out var required) && required == 0)
             ThrowLastError("GetProcessDefaultCpuSets size query failed");
 
         if (required == 0) return new { pid, ids = Array.Empty<uint>(), explicitlyAssigned = false };
@@ -227,14 +227,14 @@ internal static class Program
         var buffer = Marshal.AllocHGlobal(checked((int)(required * sizeof(uint))));
         try
         {
-            if (!GetProcessDefaultCpuSets(handle, buffer, required, out var returned))
+            if (!GetProcessDefaultCpuSets(handle.Handle, buffer, required, out var returned))
                 ThrowLastError("GetProcessDefaultCpuSets failed");
 
             var ids = new uint[returned];
-            Marshal.Copy(buffer, ids.Select(x => unchecked((int)x)).ToArray(), 0, 0);
-            // Marshal.Copy has no uint[] overload; read explicitly to avoid endian/width ambiguity.
+            // Marshal.Copy has no uint[] overload; read explicitly to avoid
+            // width/endianness ambiguity.
             for (var i = 0; i < returned; i++)
-                ids[i] = Marshal.ReadInt32(IntPtr.Add(buffer, i * sizeof(uint))) is var value ? unchecked((uint)value) : 0U;
+                ids[i] = unchecked((uint)Marshal.ReadInt32(IntPtr.Add(buffer, i * sizeof(uint))));
 
             Array.Sort(ids);
             return new { pid, ids, explicitlyAssigned = ids.Length > 0 };
@@ -250,7 +250,7 @@ internal static class Program
             throw new ArgumentException("CPU Set ID 0 is not accepted by the helper.");
 
         using var handle = OpenProcessHandle(pid, ProcessSetLimitedInformation | ProcessQueryLimitedInformation);
-        if (!SetProcessDefaultCpuSets(handle, unique, (uint)unique.Length))
+        if (!SetProcessDefaultCpuSets(handle.Handle, unique, (uint)unique.Length))
             ThrowLastError("SetProcessDefaultCpuSets failed");
 
         var observed = GetDefaultCpuSets(pid);
@@ -261,29 +261,6 @@ internal static class Program
         return new { pid, ids = observedIds, verified = true };
     }
 
-    private static IntPtr OpenProcessHandle(int pid, uint access)
-    {
-        if (pid <= 0) throw new ArgumentException("pid must be a positive integer");
-        var handle = OpenProcess(access, false, checked((uint)pid));
-        if (handle == IntPtr.Zero) ThrowLastError("OpenProcess failed for PID " + pid);
-        return handle;
-    }
-
-    private static string TryProcessName(int pid)
-    {
-        try { return Process.GetProcessById(pid).ProcessName; }
-        catch { return "pid-" + pid; }
-    }
-
-    private static int RequirePid(Request request) =>
-        request.Pid is > 0 and <= int.MaxValue ? request.Pid.Value : throw new ArgumentException("pid must be a positive integer");
-
-    private static void ThrowLastError(string prefix) =>
-        throw new Win32Exception(Marshal.GetLastWin32Error(), prefix);
-
-    private static void WriteError(string message) =>
-        Console.WriteLine(JsonSerializer.Serialize(new { ok = false, error = message }));
-
     private sealed class SafeHandleWrapper : IDisposable
     {
         public IntPtr Handle { get; }
@@ -291,6 +268,12 @@ internal static class Program
         public void Dispose() { if (Handle != IntPtr.Zero) CloseHandle(Handle); }
     }
 
-    private static SafeHandleWrapper OpenProcessHandle(int pid, uint access, bool _ = false) => new(OpenProcessHandleRaw(pid, access));
-    private static IntPtr OpenProcessHandleRaw(int pid, uint access) => OpenProcess(access, false, checked((uint)pid));
+    private static SafeHandleWrapper OpenProcessHandle(int pid, uint access)
+    {
+        if (pid <= 0) throw new ArgumentException("pid must be a positive integer");
+        var handle = OpenProcess(access, false, checked((uint)pid));
+        if (handle == IntPtr.Zero) ThrowLastError("OpenProcess failed for PID " + pid);
+        return new SafeHandleWrapper(handle);
+    }
+
 }
