@@ -7,9 +7,7 @@ import {
   getSystemCpuSets,
   setProcessDefaultCpuSets,
   safeCpuSets,
-  groupCpuSetsByCache,
   type DefaultCpuSets,
-  type NativeCpuSet,
 } from './windows-native.js';
 
 export interface ProcessPlacementPlan {
