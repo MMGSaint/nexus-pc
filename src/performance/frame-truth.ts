@@ -1,4 +1,6 @@
 import type { Fidelity } from '../core/fidelity.js';
+import type { Reading } from '../domain/telemetry.js';
+import { reading } from '../domain/telemetry.js';
 import type { FramePerformanceSummary } from './stats.js';
 
 export type FrameTruthDecision = 'benefit' | 'no_measurable_benefit' | 'regression' | 'insufficient_evidence';
@@ -63,4 +65,29 @@ export function requireFrameBenefit(
   }
   if (score >= Math.abs(p.minImprovementPercent)) return { decision: 'benefit', scorePercent: score, reason: 'Composite frame-quality score improved by ' + score.toFixed(2) + '%.' };
   return { decision: 'no_measurable_benefit', scorePercent: score, reason: 'Composite frame-quality change was only ' + score.toFixed(2) + '%, below the ' + p.minImprovementPercent + '% benefit floor.' };
+}
+
+/** Convert PresentMon evidence into the NEXUS telemetry vocabulary. */
+export function frameTruthReadings(truth: FrameTruth): readonly Reading[] {
+  const s = truth.summary;
+  const common = {
+    timestampMs: truth.capturedAtMs,
+    source: 'presentmon',
+    fidelity: truth.fidelity,
+    confidence: truth.fidelity === 'live' ? 1 : 0.5,
+  } as const;
+
+  const values: Array<readonly ['frame.time' | 'frame.fps' | 'frame.1pct_low' | 'frame.0_1pct_low' | 'frame.time.p95' | 'frame.time.p99' | 'frame.time.stddev' | 'frame.dropped', number]> = [
+    ['frame.time', s.averageFrameTimeMs],
+    ['frame.fps', s.fps],
+    ['frame.1pct_low', s.fps1PercentLow],
+    ['frame.0_1pct_low', s.fps0_1PercentLow],
+    ['frame.time.p95', s.p95FrameTimeMs],
+    ['frame.time.p99', s.p99FrameTimeMs],
+    ['frame.time.stddev', s.frameTimeStdDevMs],
+    ['frame.dropped', s.droppedFrames],
+  ];
+  return values
+    .filter(([, value]) => value !== null && Number.isFinite(value))
+    .map(([metric, value]) => reading({ ...common, metric, value }));
 }
