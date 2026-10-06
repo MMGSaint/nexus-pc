@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import { evaluateVr, vrSetting, type VrProfile } from '../../src/vr/profile.js';
 
 const profile: VrProfile = {
