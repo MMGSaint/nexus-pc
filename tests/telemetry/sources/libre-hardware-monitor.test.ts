@@ -22,6 +22,21 @@ test('LHM source stays on loopback and parses sensor values', async () => {
   assert.equal(readings.find((r) => r.metric === 'gpu.vram.used')?.value, 8.2 * 1024 ** 3);
 });
 
+test('LHM parser handles both decimal-comma and thousands-grouped values', async () => {
+  const localized = {
+    Text: 'Radeon Graphics',
+    Type: 'Hardware',
+    Children: [{ Text: 'Memory Used', Type: 'Data', Value: '1,234.5 MB', SensorId: '/1/data/0' }],
+  };
+  const source = new LibreHardwareMonitorSource({
+    url: 'http://127.0.0.1:8085',
+    fetchImpl: async () => new Response(JSON.stringify(localized), { status: 200 }),
+    logger: {} as never,
+  });
+  const readings = await source.sample({ clock: { now: () => 1000 } as never, logger: {} as never, timeoutMs: 1000 });
+  assert.equal(readings.find((r) => r.metric === 'gpu.vram.used')?.value, 1234.5 * 1024 ** 2);
+});
+
 test('LHM endpoint rejects non-loopback before network access', async () => {
   let calls = 0;
   const source = new LibreHardwareMonitorSource({ url: 'http://example.com:8085', fetchImpl: async () => { calls += 1; return new Response('{}'); }, logger: {} as never });
