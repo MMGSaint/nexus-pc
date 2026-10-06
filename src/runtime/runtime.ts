@@ -19,7 +19,7 @@ import type { CommandRunner } from '../core/exec.js';
 import { NodeCommandRunner } from '../core/exec.js';
 import type { NexusError } from '../core/errors.js';
 import { nexusError, toNexusError } from '../core/errors.js';
-import type { Fidelity } from '../core/fidelity.js';
+import { combineFidelity, type Fidelity } from '../core/fidelity.js';
 import type { IdSource } from '../core/ids.js';
 import { systemIds } from '../core/ids.js';
 import type { Logger } from '../core/logger.js';
@@ -1129,6 +1129,7 @@ export class NexusRuntime implements VesperHost {
     if (!/^[a-z0-9._-]{1,63}$/.test(applicationId)) {
       return {
         status: 'blocked',
+        fidelity: 'unavailable',
         applicationId,
         fingerprint: null,
         candidates: [],
@@ -1144,6 +1145,7 @@ export class NexusRuntime implements VesperHost {
     if (this.options.config.mode === 'observation' || this.runState === 'observation_only') {
       return {
         status: 'blocked',
+        fidelity: 'unavailable',
         applicationId,
         fingerprint: null,
         candidates: [],
@@ -1161,6 +1163,7 @@ export class NexusRuntime implements VesperHost {
     if (this.platform !== 'win32') {
       return {
         status: 'blocked',
+        fidelity: 'unavailable',
         applicationId,
         fingerprint: null,
         candidates: [],
@@ -1178,6 +1181,7 @@ export class NexusRuntime implements VesperHost {
     if (!inventory || !specialization.x3dSchedulingSensitive) {
       return {
         status: 'blocked',
+        fidelity: 'unavailable',
         applicationId,
         fingerprint: null,
         candidates: [],
@@ -1197,6 +1201,7 @@ export class NexusRuntime implements VesperHost {
     if (!target || !foreground?.ok || foreground.value.pid !== target.processId) {
       return {
         status: 'blocked',
+        fidelity: 'unavailable',
         applicationId,
         fingerprint: null,
         candidates: [],
@@ -1214,6 +1219,7 @@ export class NexusRuntime implements VesperHost {
       if (!baseline.ok) {
         return {
           status: 'failed',
+        fidelity: 'unavailable',
           applicationId,
           fingerprint: null,
           candidates: [],
@@ -1244,6 +1250,7 @@ export class NexusRuntime implements VesperHost {
     const candidates = makeCandidateGrid(dimensions, Math.max(2, Math.min(8, request.maxCandidates ?? 6)));
     const repetitions = Math.max(2, Math.min(4, Math.floor(request.repetitions ?? 3)));
     const trials: ExperimentTrialSummary[] = [];
+    let experimentFidelity: Fidelity = 'unavailable';
 
     const scoreFor = (outcome: OptimizationOutcome) => frameScorePercent(outcome.measurements);
 
@@ -1264,11 +1271,22 @@ export class NexusRuntime implements VesperHost {
         });
 
         outcomeIds.push(outcome.id);
+        experimentFidelity = combineFidelity(experimentFidelity, outcome.fidelity);
         const score = scoreFor(outcome);
         if (score) deltas.push(score.deltaPercent);
         stabilityRegression ||= outcome.stabilityRegression === true;
 
-        if (outcome.status === 'applied_unverified' || stabilityRegression || this.runState === 'observation_only') {
+        if (outcome.status === 'applied_unverified') {
+          this.runState = 'observation_only';
+          await this.eventLog.append({
+            kind: 'experiment.aborted',
+            severity: 'critical',
+            message: 'Private tuner aborted after an incomplete rollback; no further candidates will be applied.',
+            data: { applicationId, candidateId: candidate.id, outcomeId: outcome.id },
+          });
+          break;
+        }
+        if (stabilityRegression || this.runState === 'observation_only') {
           break;
         }
       }
@@ -1354,6 +1372,7 @@ export class NexusRuntime implements VesperHost {
         sandboxPowerPlanName: `NEXUS ${applicationId}`,
       });
       finalOutcomeId = finalOutcome.id;
+      experimentFidelity = combineFidelity(experimentFidelity, finalOutcome.fidelity);
       if (finalOutcome.status !== 'applied_kept') {
         // A candidate can win the multi-trial comparison and still fail the final
         // confirmation window. Conservatively report that no durable change won.
@@ -1372,6 +1391,7 @@ export class NexusRuntime implements VesperHost {
         await this.experimentStore.save(record);
         return {
           status: 'inconclusive',
+          fidelity: experimentFidelity,
           applicationId,
           fingerprint,
           candidates,
@@ -1424,6 +1444,7 @@ export class NexusRuntime implements VesperHost {
     });
 
     return {
+      fidelity: experimentFidelity,
       status: finalStatus,
       applicationId,
       fingerprint,
