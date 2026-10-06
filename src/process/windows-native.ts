@@ -165,7 +165,7 @@ export async function getProcessDefaultCpuSets(
   const result = await call(runner, { command: 'get-default-cpu-sets', pid }, options);
   if (!result.ok) return result;
   const ids = Array.isArray(result.value['ids'])
-    ? result.value['ids'].filter((x): x is number => typeof x === 'number' && Number.isSafeInteger(x) && x > 0).sort((a,b)=>a-b)
+    ? result.value['ids'].filter((x): x is number => typeof x === 'number' && Number.isSafeInteger(x) && x >= 0).sort((a,b)=>a-b)
     : [];
   return ok({ pid, ids, explicitlyAssigned: result.value['explicitlyAssigned'] === true });
 }
