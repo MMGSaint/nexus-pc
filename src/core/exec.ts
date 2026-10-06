@@ -46,6 +46,8 @@ export const ALLOWED_EXECUTABLES: readonly string[] = Object.freeze([
   'presentmon',
   // Optional Microsoft Sysinternals topology probe; observation only.
   'coreinfo',
+  // Small signed/native Windows bridge; stdin is JSON and the command set is fixed.
+  'nexus-native-helper',
   // POSIX (development host only)
   'uname',
   'lscpu',
