@@ -153,12 +153,17 @@ export class WorkloadClassifier {
     const aiProcess = matched(this.hints.ai);
 
     if (gameProcess) {
-      const weight = foregroundGameProcess ? 0.65 : 0.25;
+      const weight =
+        streamProcess && foregroundGameProcess
+          ? 0.35
+          : foregroundGameProcess
+            ? 0.65
+            : 0.25;
       add(
         'gaming',
         weight,
         foregroundGameProcess
-          ? `the foreground process is a known game ("${foregroundGameProcess}"; executable matching is corroborating evidence)`
+          ? `the foreground process is a known game ("${foregroundGameProcess}"; executable matching is a corroborating heuristic)`
           : `a known game process is running in the background ("${gameProcess}"; name matching is a weak heuristic)`,
       );
     }
