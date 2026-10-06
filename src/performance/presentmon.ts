@@ -94,7 +94,7 @@ export function parsePresentMonCsv(csv: string): FrameSample[] {
     for (let j = 0; j < headers.length; j += 1) row[headers[j]!] = values[j] ?? '';
 
     const frameTime = parseNumber(row.FrameTime) ?? parseNumber(row.MsBetweenPresents);
-    if (frameTime === null || frameTime < 0 || frameTime > 10_000) continue;
+    if (frameTime === null || frameTime <= 0 || frameTime > 10_000) continue;
 
     const gpuTimeMs = parseNumber(row.GPUTime) ?? parseNumber(row.msGPUActive) ?? undefined;
     const cpuBusyMs = parseNumber(row.CPUBusy) ?? parseNumber(row.msCPUBusy) ?? undefined;
