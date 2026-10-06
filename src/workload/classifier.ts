@@ -28,6 +28,7 @@ import type {
   WorkloadClass,
   WorkloadClassification,
   WorkloadSignals,
+  APPLICATION_HINTS,
 } from '../domain/workload.js';
 import { hintIsFresh } from '../domain/workload.js';
 
@@ -140,6 +141,10 @@ export class WorkloadClassifier {
       names.find((n) => list.some((h) => n.includes(h))) ?? null;
 
     const gameProcess = matched(this.hints.gaming);
+
+    const detectedApplicationIds = Object.entries(APPLICATION_HINTS)
+      .filter(([, hints]) => hints.some((hint) => names.some((name) => name.includes(hint))))
+      .map(([id]) => id);
     const streamProcess = matched(this.hints.streaming);
     const devProcess = matched(this.hints.development);
     const aiProcess = matched(this.hints.ai);
@@ -231,10 +236,11 @@ export class WorkloadClassifier {
       confidence: round(confidence),
       candidates: candidates.map((c) => ({ ...c, score: round(c.score) })),
       fidelity,
+      detectedApplicationIds,
       missingSignals: missing,
       ...(declaredContext === undefined ? {} : { declaredContext }),
       contextConflict,
-      explanation: explain(workload, confidence, candidates, missing, contextConflict, declaredContext),
+      explanation: explain(workload, confidence, candidates, missing, contextConflict, declaredContext, detectedApplicationIds),
     };
   }
 }
@@ -255,6 +261,7 @@ function explain(
   missing: readonly string[],
   conflict: boolean,
   hint: ContextHint | undefined,
+  detectedApplicationIds: readonly string[],
 ): string {
   const parts: string[] = [];
   if (workload === 'unknown') {
@@ -263,6 +270,9 @@ function explain(
     const reasons = candidates.find((c) => c.workload === workload)?.reasons ?? [];
     parts.push(`Classified as ${workload} (confidence ${(confidence * 100).toFixed(0)}%).`);
     if (reasons.length > 0) parts.push(`Because: ${reasons.join('; ')}.`);
+  }
+  if (detectedApplicationIds.length > 0) {
+    parts.push(`Recognized application(s): ${detectedApplicationIds.join(', ')} (process-name heuristic).`);
   }
   if (missing.length > 0) {
     parts.push(`Confidence is capped because these signals are unavailable: ${missing.join(', ')}.`);
