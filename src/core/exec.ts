@@ -327,9 +327,11 @@ export class ScriptedCommandRunner implements CommandRunner {
         return response.result;
       }
     }
+    let lastMatch: ScriptedResponse | undefined;
     for (const response of this.responses) {
-      if (response.match(request)) return response.result;
+      if (response.match(request)) lastMatch = response;
     }
+    if (lastMatch) return lastMatch.result;
     return err(nexusError('E_UNAVAILABLE', `no scripted response for ${request.file}`));
   }
 }
