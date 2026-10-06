@@ -16,6 +16,8 @@ export interface VrProfile {
   readonly settings: readonly GameDesiredSetting[];
   readonly maxGpuUtilizationPct: number;
   readonly minHeadroomPct: number;
+  /** Capabilities that must be live before VR policy is evaluated. */
+  readonly requiredCapabilities?: readonly string[];
 }
 
 export interface VrObservedState {
@@ -28,11 +30,13 @@ export interface VrObservedState {
   readonly gpuUtilizationPct: number | null;
   readonly gpuTemperatureC: number | null;
   readonly source: 'live' | 'unavailable' | 'mocked';
+  readonly capabilities?: Readonly<Record<string, boolean>>;
 }
 
 export interface VrDecision {
   readonly profileId: string;
   readonly healthy: boolean;
+  readonly supported: boolean;
   readonly reasons: readonly string[];
   readonly proposed: readonly GameDesiredSetting[];
 }
@@ -49,7 +53,19 @@ export function evaluateVr(
 
   if (!observed.active) {
     reasons.push('VR session is not active.');
-    return { profileId: profile.id, healthy: true, reasons, proposed: [] };
+    return { profileId: profile.id, healthy: true, supported: true, reasons, proposed: [] };
+  }
+
+  const required = profile.requiredCapabilities ?? [];
+  const missing = required.filter((id) => observed.capabilities?.[id] !== true);
+  if (missing.length > 0) {
+    return {
+      profileId: profile.id,
+      healthy: false,
+      supported: false,
+      reasons: ['VR policy cannot be evaluated because required capabilities are unavailable: ' + missing.join(', ') + '.'],
+      proposed: [],
+    };
   }
 
   if (
@@ -91,6 +107,7 @@ export function evaluateVr(
   return {
     profileId: profile.id,
     healthy: reasons.length === 0,
+    supported: true,
     reasons,
     proposed: reasons.length === 0 ? [] : [...profile.settings],
   };
