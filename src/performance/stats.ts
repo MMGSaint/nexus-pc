@@ -6,11 +6,16 @@
  * creating a new trust boundary.
  */
 
+export type FrameType = 'application' | 'repeated' | 'amd_afmf' | 'intel_xefg' | 'unknown';
+
 export interface FrameSample {
   readonly frameTimeMs: number;
   readonly gpuTimeMs?: number;
   readonly cpuBusyMs?: number;
   readonly displayLatencyMs?: number;
+  readonly presentIntervalMs?: number;
+  readonly displayIntervalMs?: number;
+  readonly frameType?: FrameType;
   readonly dropped?: boolean;
 }
 
@@ -24,6 +29,14 @@ export interface FramePerformanceSummary {
   readonly p95FrameTimeMs: number | null;
   readonly p99FrameTimeMs: number | null;
   readonly frameTimeStdDevMs: number | null;
+  readonly presentIntervalMs: number | null;
+  readonly displayIntervalMs: number | null;
+  readonly displayedFps: number | null;
+  readonly presentedFps: number | null;
+  readonly displayLatencyP95Ms: number | null;
+  readonly generatedFrameCount: number;
+  readonly generatedFrameFraction: number | null;
+  readonly afmfFrameCount: number;
   readonly droppedFrames: number;
   readonly droppedFramesKnown: boolean;
 }
@@ -81,6 +94,11 @@ export function summarizeFrames(samples: readonly FrameSample[]): FramePerforman
   const dropped = samples.filter((s) => s.dropped === true).length;
   const droppedKnown = samples.some((s) => s.dropped !== undefined);
   const avg = mean(frameTimes);
+  const presentIntervals = samples.map((s) => s.presentIntervalMs).filter((v): v is number => v !== undefined && Number.isFinite(v) && v > 0);
+  const displayIntervals = samples.map((s) => s.displayIntervalMs).filter((v): v is number => v !== undefined && Number.isFinite(v) && v > 0);
+  const latencies = samples.map((s) => s.displayLatencyMs).filter((v): v is number => v !== undefined && Number.isFinite(v) && v >= 0);
+  const generated = samples.filter((s) => s.frameType === 'amd_afmf' || s.frameType === 'intel_xefg').length;
+  const afmf = samples.filter((s) => s.frameType === 'amd_afmf').length;
 
   return {
     sampleCount: frameTimes.length,
@@ -92,6 +110,14 @@ export function summarizeFrames(samples: readonly FrameSample[]): FramePerforman
     p95FrameTimeMs: percentile(frameTimes, 0.95),
     p99FrameTimeMs: percentile(frameTimes, 0.99),
     frameTimeStdDevMs: standardDeviation(frameTimes),
+    presentIntervalMs: mean(presentIntervals),
+    displayIntervalMs: mean(displayIntervals),
+    displayedFps: (() => { const m = mean(displayIntervals); return m && m > 0 ? 1000 / m : null; })(),
+    presentedFps: (() => { const m = mean(presentIntervals); return m && m > 0 ? 1000 / m : null; })(),
+    displayLatencyP95Ms: percentile(latencies, 0.95),
+    generatedFrameCount: generated,
+    generatedFrameFraction: samples.length > 0 ? generated / samples.length : null,
+    afmfFrameCount: afmf,
     droppedFrames: dropped,
     droppedFramesKnown: droppedKnown,
   };
