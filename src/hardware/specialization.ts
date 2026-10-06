@@ -65,9 +65,10 @@ export function specializeTarget(inventory: HardwareInventory | null): TargetSpe
   }
 
   const cpu = inventory.cpu.model?.toUpperCase() ?? '';
-  const gpu = inventory.gpus[0]?.model?.toUpperCase() ?? '';
   const cpuMatch = cpu.includes(PRIMARY_TARGET.cpuNeedle);
-  const gpuMatch = gpu.includes(PRIMARY_TARGET.gpuNeedle);
+  const gpuMatch = inventory.gpus.some((entry) =>
+    (entry.model?.toUpperCase() ?? '').includes(PRIMARY_TARGET.gpuNeedle),
+  );
   const ramMatch = inventory.memory.installedBytes === PRIMARY_TARGET.installedMemoryBytes;
   const exactHardwareMatch = cpuMatch && gpuMatch && ramMatch;
 
