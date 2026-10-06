@@ -88,7 +88,7 @@ request for them is refused with a reason rather than an "unknown capability".
 
 | Capability | Why |
 |---|---|
-| CPU die temperature, package power, per-core clocks | No in-box Windows interface exposes these on a desktop AM5 board. They require a ring-0 helper. See the sensor bridge in [telemetry.md](telemetry.md). |
+| CPU die temperature, package power, per-core clocks | Requires the separate LibreHardwareMonitor bridge; NEXUS does not vendor its driver/library. |
 | GPU temperature, hotspot, fan RPM, board power, GPU clocks | Requires AMD's ADLX library, which ships inside the display driver and has no command-line or WMI surface. See [dependencies.md](dependencies.md). |
 | Process foreground detection | Not implemented. Enumerated processes report `isForeground: null`; the classifier does not rely on foreground state. |
 | Process priority control | Depends on process enumeration (now available) plus a write adapter that is not implemented. Remains registered as unavailable. |
