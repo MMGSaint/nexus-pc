@@ -54,7 +54,7 @@ export interface VesperHost {
   getStatus(): Promise<HealthReport>;
   getCapabilities(): Promise<readonly CapabilityRecord[]>;
   getTelemetrySummary(windowMs: number): Promise<TelemetrySummary>;
-  getPerformanceEvidence(windowMs: number, applicationId?: string): Promise<unknown>;
+  getPerformanceEvidence?(windowMs: number, applicationId?: string): Promise<unknown | null>;
   getCurrentProfile(): Promise<{ readonly profile: ProfileDocument | null; readonly appliedAtMs: number | null }>;
   listProfiles(): Promise<readonly ProfileView[]>;
   analyzeWorkload(): Promise<WorkloadClassification>;
@@ -64,8 +64,8 @@ export interface VesperHost {
   optimize(params: { readonly profileId?: string; readonly dryRun?: boolean }): Promise<OptimizationOutcome>;
   rollback(checkpointId: string): Promise<RestoreResult>;
   getOptimizationResult(outcomeId: string): Promise<OptimizationOutcome | null>;
-  getDecisionEvidence(outcomeId: string): Promise<unknown>;
-  getTopology(): Promise<unknown>;
+  getDecisionEvidence?(outcomeId: string): Promise<unknown | null>;
+  getTopology?(): Promise<unknown | null>;
   /** Identifier recorded on Vesper-origin requests, for audit. */
   readonly requesterId: string;
   /** The runtime's clock, so handler timestamps stay deterministic in tests. */
@@ -110,7 +110,21 @@ export async function dispatch(
     }
 
     case 'getPerformanceEvidence': {
-      return okResult((await host.getTelemetrySummary(params?.windowMs ?? 30_000)).fidelity, await host.getPerformanceEvidence(params?.windowMs ?? 30_000, params?.applicationId));
+      if (!host.getPerformanceEvidence) return errResult(nexusError('E_UNAVAILABLE', 'rich performance evidence is not implemented by this host'));
+      const evidence = await host.getPerformanceEvidence(params?.windowMs ?? 30_000, params?.applicationId);
+      if (evidence === null) return errResult(nexusError('E_UNAVAILABLE', 'no rich performance evidence is available'));
+      const fidelity =
+        typeof evidence === 'object' && evidence !== null && !Array.isArray(evidence) &&
+        (evidence as Record<string, unknown>).fidelity === 'live'
+          ? 'live'
+          : typeof evidence === 'object' && evidence !== null && !Array.isArray(evidence) &&
+            (evidence as Record<string, unknown>).fidelity === 'mocked'
+            ? 'mocked'
+            : typeof evidence === 'object' && evidence !== null && !Array.isArray(evidence) &&
+              (evidence as Record<string, unknown>).fidelity === 'simulated'
+              ? 'simulated'
+              : 'unverified';
+      return okResult(fidelity, evidence);
     }
 
     case 'getCurrentProfile': {
@@ -170,12 +184,30 @@ export async function dispatch(
 
     case 'getDecisionEvidence': {
       if (!params?.outcomeId) return errResult(nexusError('E_INVALID_INPUT', 'getDecisionEvidence requires an outcomeId'));
+      if (!host.getDecisionEvidence) return errResult(nexusError('E_UNAVAILABLE', 'decision evidence is not implemented by this host'));
       const evidence = await host.getDecisionEvidence(params.outcomeId);
-      return evidence === null ? errResult(nexusError('E_UNAVAILABLE', `no decision evidence with id ${params.outcomeId}`)) : okResult('live', evidence);
+      if (evidence === null) return errResult(nexusError('E_UNAVAILABLE', `no decision evidence with id ${params.outcomeId}`));
+      const fidelity =
+        typeof evidence === 'object' && evidence !== null && !Array.isArray(evidence) &&
+        (evidence as Record<string, unknown>).fidelity === 'live'
+          ? 'live'
+          : typeof evidence === 'object' && evidence !== null && !Array.isArray(evidence) &&
+            (evidence as Record<string, unknown>).fidelity === 'mocked'
+            ? 'mocked'
+            : 'unverified';
+      return okResult(fidelity, evidence);
     }
 
     case 'getTopology': {
-      return okResult('live', await host.getTopology());
+      if (!host.getTopology) return errResult(nexusError('E_UNAVAILABLE', 'topology evidence is not implemented by this host'));
+      const evidence = await host.getTopology();
+      if (evidence === null) return errResult(nexusError('E_UNAVAILABLE', 'topology evidence is unavailable'));
+      const fidelity =
+        typeof evidence === 'object' && evidence !== null && !Array.isArray(evidence) &&
+        (evidence as Record<string, unknown>).fidelity === 'live'
+          ? 'live'
+          : 'unverified';
+      return okResult(fidelity, evidence);
     }
 
     case 'getOptimizationResult': {
