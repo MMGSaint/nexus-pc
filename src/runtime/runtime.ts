@@ -71,6 +71,7 @@ import { OsMemorySource } from '../telemetry/sources/os-memory.js';
 import { SelfTelemetrySource } from '../telemetry/sources/self.js';
 import { SensorBridgeSource } from '../telemetry/sources/sensor-bridge.js';
 import { LibreHardwareMonitorSource } from '../telemetry/sources/libre-hardware-monitor.js';
+import { probeCoreinfoTopology, type X3dTopology } from '../hardware/coreinfo-topology.js';
 import { PresentMonCollector } from '../performance/presentmon.js';
 import { captureWindowsStability, diffWindowsStability } from '../stability/windows-event-oracle.js';
 import { WindowsTelemetrySource } from '../telemetry/sources/windows.js';
@@ -1292,6 +1293,13 @@ export class NexusRuntime implements VesperHost {
   /** On-demand PresentMon evidence for bounded A/B experiments and the future UI. */
   get presentMonCollector(): PresentMonCollector {
     return this.presentMon;
+  }
+
+  async probeX3dTopology() {
+    if (this.platform !== 'win32') {
+      return { ok: false as const, error: nexusError('E_UNSUPPORTED', 'X3D topology probing is currently Windows-only') };
+    }
+    return probeCoreinfoTopology(this.runner);
   }
 
   get capabilityRegistry(): CapabilityRegistry {
