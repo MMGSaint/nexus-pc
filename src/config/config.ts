@@ -111,6 +111,15 @@ const configSchema = vObject({
       telemetry: vOptional(vBoolean()),
     }),
   ),
+  /** Third-party observation tools are never resolved through PATH. */
+  tools: vOptional(
+    vObject({
+      presentMonPath: vOptional(vString({ maxLength: 1024 })),
+      presentMonSha256: vOptional(vString({ maxLength: 64 })),
+      coreInfoPath: vOptional(vString({ maxLength: 1024 })),
+      coreInfoSha256: vOptional(vString({ maxLength: 64 })),
+    }),
+  ),
   policy: vOptional(policyOverrideSchema),
 });
 
@@ -131,6 +140,12 @@ export interface NexusConfig {
     readonly hardwareFixture: string | null;
     readonly telemetry: boolean;
   };
+  readonly tools: {
+    readonly presentMonPath: string | null;
+    readonly presentMonSha256: string | null;
+    readonly coreInfoPath: string | null;
+    readonly coreInfoSha256: string | null;
+  };
   readonly policy: PolicyOverride | undefined;
 }
 
@@ -149,6 +164,7 @@ export const DEFAULT_CONFIG: NexusConfig = Object.freeze({
     scopes: Object.freeze(['status', 'telemetry', 'capabilities', 'workload', 'recommend']),
   }),
   simulate: Object.freeze({ hardwareFixture: null, telemetry: false }),
+  tools: Object.freeze({ presentMonPath: null, presentMonSha256: null, coreInfoPath: null, coreInfoSha256: null }),
   policy: undefined,
 });
 
@@ -189,6 +205,12 @@ export async function loadConfig(paths: NexusPaths): Promise<Result<NexusConfig,
       hardwareFixture: raw.simulate?.hardwareFixture ?? null,
       telemetry: raw.simulate?.telemetry ?? false,
     },
+    tools: {
+      presentMonPath: raw.tools?.presentMonPath ?? null,
+      presentMonSha256: raw.tools?.presentMonSha256 ?? null,
+      coreInfoPath: raw.tools?.coreInfoPath ?? null,
+      coreInfoSha256: raw.tools?.coreInfoSha256 ?? null,
+    },
     policy: normalisePolicyOverride(raw.policy),
   });
 }
@@ -212,6 +234,12 @@ export function serializeConfig(config: NexusConfig): Record<string, unknown> {
         ? {}
         : { hardwareFixture: config.simulate.hardwareFixture }),
       telemetry: config.simulate.telemetry,
+    },
+    tools: {
+      ...(config.tools.presentMonPath === null ? {} : { presentMonPath: config.tools.presentMonPath }),
+      ...(config.tools.presentMonSha256 === null ? {} : { presentMonSha256: config.tools.presentMonSha256 }),
+      ...(config.tools.coreInfoPath === null ? {} : { coreInfoPath: config.tools.coreInfoPath }),
+      ...(config.tools.coreInfoSha256 === null ? {} : { coreInfoSha256: config.tools.coreInfoSha256 }),
     },
     ...(config.policy === undefined ? {} : { policy: config.policy }),
   };
