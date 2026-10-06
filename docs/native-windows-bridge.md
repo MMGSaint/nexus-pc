@@ -22,7 +22,7 @@ From a Windows development shell:
 
 powershell -ExecutionPolicy Bypass -File .\tools\native-windows-helper\build.ps1
 
-Do not place the helper on PATH. Put the resulting `nexus-native-helper.exe` at a fixed local path and configure that absolute path as `tools.nativeHelperPath` in NEXUS. For stronger supply-chain protection, also set `tools.nativeHelperSha256` to the SHA-256 of the exact binary.
+Do not place the helper on PATH. Put the resulting `nexus-native-helper.exe` at a fixed local path and configure that absolute path as `tools.nativeHelperPath` in NEXUS. Set `tools.nativeHelperSha256` to the SHA-256 of that exact binary; NEXUS will not invoke the helper on Windows without both the absolute path and matching hash.
 
 ## Authority boundary
 
