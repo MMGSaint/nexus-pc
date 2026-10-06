@@ -62,9 +62,11 @@ export function parseCoreinfoCacheOutput(stdout: string): X3dTopology {
     const logicalProcessors = [...maskText]
       .map((ch, index) => (ch === '*' ? index : -1))
       .filter((index) => index >= 0);
+    const sizeText = cache.groups.size;
+    if (!sizeText) continue;
     l3Domains.push({
       level,
-      sizeBytes: parseSizeBytes(cache.groups.size),
+      sizeBytes: parseSizeBytes(sizeText),
       logicalProcessors,
       maskText,
     });
