@@ -71,6 +71,8 @@ export const CAPABILITY_IDS = [
   'storage.telemetry.temperature',
   'process.enumerate',
   'process.foreground',
+  'frame.presentmon.capture',
+  'vr.openxr.runtime',
   'process.priority.write',
   'workload.detect',
   'power.scheme.read',
