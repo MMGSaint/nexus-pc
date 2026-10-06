@@ -50,6 +50,7 @@ import { CheckpointStore } from '../checkpoint/store.js';
 import type { RestoreResult } from '../checkpoint/store.js';
 import type { NexusConfig } from '../config/config.js';
 import { HardwareDiscovery } from '../hardware/discovery.js';
+import { automaticProfileGuard, specializeTarget } from '../hardware/specialization.js';
 import { LinuxHardwareProvider } from '../hardware/providers/linux.js';
 import { MockHardwareProvider } from '../hardware/providers/mock.js';
 import { WindowsHardwareProvider } from '../hardware/providers/windows.js';
@@ -810,6 +811,19 @@ export class NexusRuntime implements VesperHost {
       };
     }
 
+    if (profileId === undefined) {
+      const guard = automaticProfileGuard(chosen.profile, specializeTarget(this.inventory));
+      if (guard !== null) {
+        return {
+          workload,
+          recommendedProfileId: null,
+          rationale: guard,
+          proposedChanges: [],
+          noActionReason: 'no_proposal_generated',
+        };
+      }
+    }
+
     const current = await this.currentControlValues();
     const result = this.engine.propose({
       workload,
@@ -999,6 +1013,13 @@ export class NexusRuntime implements VesperHost {
           : `No profile targets a ${workload.workload} workload.`,
         workload,
       );
+    }
+
+    if (request.profileId === undefined) {
+      const guard = automaticProfileGuard(chosen.profile, specializeTarget(this.inventory));
+      if (guard !== null) {
+        return this.engine.noAction('no_proposal_generated', guard, workload);
+      }
     }
 
     const current = await this.currentControlValues();

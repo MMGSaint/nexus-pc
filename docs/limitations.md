@@ -126,11 +126,15 @@ around it.
 ## `os.cpus()` limits on very large machines
 
 Node's `os.cpus()` is capped at 64 logical processors on Windows. Irrelevant
-for a 32-thread 9950X, but no topology feature should be built on it.
+for a 32-thread 9950X3D, but no topology feature should be built on it.
 
 ## WMI cannot see CCD boundaries
 
-The 9950X is two CCDs of 8 cores with separate L3 per CCD, which matters for
+The 9950X3D uses an X3D-specific multi-CCD topology whose cache and scheduling behaviour matters for
 scheduling and for interpreting per-CCD temperatures. `Win32_Processor` reports
 one socket with 16 cores and no hint of the split. NEXUS does not currently
 expose CCD topology.
+
+## Private target bias
+
+This repository is intentionally biased toward one target machine while it is private. That is deliberate: optimization experiments can be deeper when the hardware, games and workloads are known. The boundary is that machine-specific strategy may narrow automatic behaviour, but it cannot widen the safety kernel or bypass capability, telemetry, baseline, confirmation, or rollback checks.

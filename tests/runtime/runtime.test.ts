@@ -134,7 +134,7 @@ describe('staged startup', () => {
     await runtime.waitUntilInitialized();
 
     const inventory = runtime.inventorySnapshot;
-    expect(inventory?.cpu.model).toContain('9950X');
+    expect(inventory?.cpu.model).toContain('9950X3D');
     expect(inventory?.gpus[0]?.vramBytes).toBe(20 * 1024 ** 3);
     expect(inventory?.memory.installedBytes).toBe(96 * 1024 ** 3);
     expect(inventory?.fidelity).toBe('mocked');
