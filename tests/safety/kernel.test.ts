@@ -315,6 +315,25 @@ describe('SafetyKernel — runtime and rate gating', () => {
     expect(codes(verdict)).toContain('COOLDOWN');
   });
 
+  it('allows an approved temporary experiment to bypass cooldown without bypassing policy', () => {
+    const verdict = kernel.evaluate(
+      proposal({ changes: [change('power.processor.epp', 50)] }),
+      safetyContext({
+        recentApplications: [{ control: 'power.processor.epp', appliedAtMs: T0 - 1_000 }],
+        transactionalExperiment: true,
+      }),
+    );
+    expect(verdict.decision).toBe('allow');
+  });
+
+  it('blocks a non-experiment control even when transactional mode is requested', () => {
+    const verdict = kernel.evaluate(
+      proposal({ changes: [change('power.processor.min_state', 20)] }),
+      safetyContext({ transactionalExperiment: true }),
+    );
+    expect(codes(verdict)).toContain('EXPERIMENT_CONTROL_NOT_ALLOWED');
+  });
+
   it('permits again once the cooldown has elapsed', () => {
     const verdict = kernel.evaluate(
       proposal(),
