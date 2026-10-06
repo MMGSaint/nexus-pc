@@ -9,7 +9,7 @@ const HELPER = 'C:\\NEXUS\\native-windows-helper.exe';
 describe('native Windows bridge', () => {
   it('fails closed without an explicitly configured helper path on Windows', async () => {
     const runner = new ScriptedCommandRunner();
-    const result = await getForegroundProcess(runner, { executable: HELPER });
+    const result = await getForegroundProcess(runner);
     if (process.platform === 'win32') {
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe('E_UNAVAILABLE');
