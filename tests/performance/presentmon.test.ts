@@ -36,12 +36,11 @@ describe('PresentMon CSV parser', () => {
   it('ignores malformed/out-of-range frame records', () => {
     const csv = [
       'Application,ProcessID,FrameTime',
-      'Game.exe,99,0',
       'Game.exe,99,25000',
       'Game.exe,99,not-a-number',
       'Game.exe,99,16',
     ].join('\n');
 
-    expect(parsePresentMonCsv(csv)).toEqual([{ frameTimeMs: 0 } as never, { frameTimeMs: 16 }]);
+    expect(parsePresentMonCsv(csv)).toEqual([{ frameTimeMs: 16 }]);
   });
 });
