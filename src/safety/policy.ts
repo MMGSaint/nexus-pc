@@ -254,6 +254,12 @@ function buildBasePolicy(): SafetyPolicy {
 
 export const BASE_POLICY: SafetyPolicy = buildBasePolicy();
 
+/** Controls permitted to participate in temporary, isolated tuner trials. */
+export const TRANSACTIONAL_EXPERIMENT_CONTROLS: ReadonlySet<ControlId> = new Set<ControlId>([
+  'power.processor.epp',
+  'power.processor.boost_mode',
+]);
+
 /* ------------------------------------------------------------- narrowing */
 
 export interface ControlPolicyOverride {

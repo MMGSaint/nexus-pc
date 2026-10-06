@@ -63,7 +63,9 @@ export type RollbackPolicy =
   /** Keep the change unless a regression was measured. The default. */
   | 'on_regression'
   /** Keep only if a benefit was measured. Used for validation runs. */
-  | 'unless_benefit';
+  | 'unless_benefit'
+  /** Temporary experiment trial: always restore the pre-trial checkpoint. */
+  | 'always';
 
 export interface EngineOptions {
   readonly clock: Clock;
@@ -92,6 +94,10 @@ export interface ExecutionEnvironment {
   /** Raises telemetry resolution for the measurement window. */
   readonly onMeasurementWindow?: (windowMs: number) => void;
   readonly rollbackPolicy?: RollbackPolicy;
+  /** Internal experiment trial marker; only NEXUS can set this. */
+  readonly transactionalExperiment?: boolean;
+  /** Optional stability oracle called while the candidate is still active, before rollback. */
+  readonly stabilityCheck?: () => Promise<{ readonly unstable: boolean; readonly detail: string } | null>;
 }
 
 export interface ProposalContext {
@@ -223,6 +229,7 @@ export class OptimizationEngine {
         appliedAtMs: r.appliedAtMs,
       })),
       actuatorFidelity: (control) => this.options.registry.fidelityOf(control),
+      ...(environment.transactionalExperiment === undefined ? {} : { transactionalExperiment: environment.transactionalExperiment }),
     };
 
     const verdict = this.options.kernel.evaluate(proposal, safetyContext);
@@ -447,6 +454,17 @@ export class OptimizationEngine {
     await this.wait(windowMs);
     const afterSummary = await environment.measureAfter(windowMs);
     const measurements = compare(environment.beforeSummary, afterSummary);
+    const stability = environment.stabilityCheck ? await environment.stabilityCheck() : null;
+
+    if (stability) {
+      await this.options.eventLog.append({
+        kind: 'stability.observed',
+        severity: stability.unstable ? 'error' : 'info',
+        message: stability.detail,
+        correlationId: outcomeId,
+        data: { unstable: stability.unstable },
+      });
+    }
 
     await this.options.eventLog.append({
       kind: 'optimization.measured',
@@ -466,13 +484,17 @@ export class OptimizationEngine {
     const policy = environment.rollbackPolicy ?? 'on_regression';
 
     let rollbackReason: string | null = null;
-    if (!usable) {
+    if (stability?.unstable) {
+      rollbackReason = `The stability oracle detected a regression while the candidate was active: ${stability.detail}`;
+    } else if (!usable) {
       rollbackReason =
         'The effect could not be measured — telemetry produced nothing usable during the window — so the change is being reverted rather than kept on faith.';
     } else if (regressions.length > 0) {
       rollbackReason = `A regression was measured: ${regressions.map((r) => r.message).join('; ')}.`;
     } else if (policy === 'unless_benefit' && !benefit) {
       rollbackReason = 'No measurable benefit was observed, and this run was configured to keep only measured wins.';
+    } else if (policy === 'always') {
+      rollbackReason = 'Temporary experiment trial complete; restoring the pre-trial state before the next candidate.';
     }
 
     if (rollbackReason !== null) {
@@ -490,6 +512,7 @@ export class OptimizationEngine {
           actuatorContext,
           reason: rollbackReason,
           measurements,
+          stabilityRegression: stability?.unstable === true,
         }),
       );
     }
@@ -515,6 +538,7 @@ export class OptimizationEngine {
         applied,
         checkpointId: checkpoint.value.id,
         measurements,
+        stabilityRegression: false,
         summary: benefit
           ? `Applied ${applied.length} change(s) and measured an improvement.`
           : `Applied ${applied.length} change(s). No regression was measured, but no improvement was measurable either.`,
@@ -536,6 +560,7 @@ export class OptimizationEngine {
     actuatorContext: ActuatorContext;
     reason: string;
     measurements: OptimizationOutcome['measurements'];
+    stabilityRegression?: boolean;
   }): Promise<OptimizationOutcome> {
     if (args.attemptedControls.length === 0) {
       await this.options.journal.advance(args.record, 'abandoned', 'nothing was applied');
@@ -548,6 +573,7 @@ export class OptimizationEngine {
         ...(args.verdict === undefined ? {} : { verdict: args.verdict }),
         checkpointId: args.checkpointId,
         measurements: args.measurements,
+        ...(args.stabilityRegression === undefined ? {} : { stabilityRegression: args.stabilityRegression }),
         summary: `${args.reason} Nothing had been changed, so there was nothing to revert.`,
         findings: args.verdict?.findings ?? [],
       });
@@ -608,6 +634,7 @@ export class OptimizationEngine {
       applied: args.applied,
       checkpointId: args.checkpointId,
       measurements: args.measurements,
+      ...(args.stabilityRegression === undefined ? {} : { stabilityRegression: args.stabilityRegression }),
       rolledBack: true,
       summary: `${args.reason} The previous state has been restored and verified.`,
       findings: args.verdict?.findings ?? [],
@@ -625,6 +652,7 @@ export class OptimizationEngine {
     applied?: readonly AppliedChange[];
     checkpointId?: string;
     measurements?: OptimizationOutcome['measurements'];
+    stabilityRegression?: boolean;
     rolledBack?: boolean;
     summary: string;
     findings: readonly SafetyFinding[];
@@ -643,6 +671,7 @@ export class OptimizationEngine {
       rolledBack: args.rolledBack ?? false,
       checkpointId: args.checkpointId ?? null,
       measurements: args.measurements ?? [],
+      ...(args.stabilityRegression === undefined ? {} : { stabilityRegression: args.stabilityRegression }),
       summary: args.summary,
       findings: args.findings,
     };

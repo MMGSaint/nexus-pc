@@ -33,7 +33,7 @@ import { NEXUS_VERSION } from '../version.js';
 import type { CapabilityRecord } from '../domain/capability.js';
 import type { ControlId, ControlValue } from '../domain/control.js';
 import type { HealthReport, RunState, ShutdownKind } from '../domain/health.js';
-import type { OptimizationOutcome } from '../domain/optimization.js';
+import type { OptimizationOutcome, OptimizationProposal } from '../domain/optimization.js';
 import type { ProfileDocument } from '../domain/profile.js';
 import { OBSERVATION_PROFILE_ID } from '../domain/profile.js';
 import type { HardwareInventory } from '../domain/hardware.js';
@@ -53,6 +53,7 @@ import type { NexusConfig } from '../config/config.js';
 import { HardwareDiscovery } from '../hardware/discovery.js';
 import { readWindowsDisplayDriver } from '../hardware/driver.js';
 import { automaticProfileGuard, specializeTarget } from '../hardware/specialization.js';
+import { selectPrimaryGpuFromInventory } from '../hardware/primary-gpu.js';
 import { LinuxHardwareProvider } from '../hardware/providers/linux.js';
 import { MockHardwareProvider } from '../hardware/providers/mock.js';
 import { WindowsHardwareProvider } from '../hardware/providers/windows.js';
@@ -65,7 +66,7 @@ import type { ExecutionEnvironment } from '../optimizer/engine.js';
 import { OperationJournal } from '../optimizer/journal.js';
 import { ProfileStore, applicability } from '../profiles/store.js';
 import { SafetyKernel } from '../safety/kernel.js';
-import { BASE_POLICY, narrowPolicy } from '../safety/policy.js';
+import { BASE_POLICY, narrowPolicy, TRANSACTIONAL_EXPERIMENT_CONTROLS } from '../safety/policy.js';
 import { writableControls } from '../safety/controls.js';
 import { TelemetryPipeline } from '../telemetry/pipeline.js';
 import { LinuxTelemetrySource } from '../telemetry/sources/linux.js';
@@ -85,6 +86,8 @@ import { createProcessEnumerator } from '../process/enumerate.js';
 import { getForegroundProcess } from '../process/windows-native.js';
 import type { ProcessEnumerator } from '../process/enumerate.js';
 import { WorkloadClassifier, signalsFromSnapshot } from '../workload/classifier.js';
+import { decideExperiment, defaultPrivateX3dDimensions, fingerprintExperiment, makeCandidateGrid, frameScorePercent, type ExperimentCandidate, type ExperimentRunResult, type ExperimentTrialSummary } from '../optimizer/experiment-plan.js';
+import { ExperimentStore, type ExperimentRecord } from '../optimizer/experiment-store.js';
 import { ensureToken } from '../vesper/auth.js';
 import type { ProfileView, RecommendationView, VesperHost } from '../vesper/handlers.js';
 import { VesperServer } from '../vesper/server.js';
@@ -146,6 +149,7 @@ export class NexusRuntime implements VesperHost {
   /** Mature frame collector; PresentMon owns ETW, NEXUS owns interpretation. */
   private readonly presentMon: PresentMonCollector;
   private readonly powerSandbox: WindowsPowerPlanSandbox;
+  private readonly experimentStore: ExperimentStore;
   private vesper: VesperServer | null = null;
 
   private startedAtMs = 0;
@@ -175,6 +179,7 @@ export class NexusRuntime implements VesperHost {
     this.platform = options.platform ?? process.platform;
     this.presentMon = new PresentMonCollector({ runner: this.runner, paths: options.paths });
     this.powerSandbox = new WindowsPowerPlanSandbox(this.runner, 15_000, options.paths);
+    this.experimentStore = new ExperimentStore(options.paths, this.clock, this.logger);
     this.processEnumerator = createProcessEnumerator({
       platform: this.platform,
       runner: this.runner,
@@ -1112,6 +1117,7 @@ export class NexusRuntime implements VesperHost {
       measurements: outcome.measurements,
       checkpointId: outcome.checkpointId,
       rolledBack: outcome.rolledBack,
+      stabilityRegression: outcome.stabilityRegression ?? false,
       safetyDecision: outcome.verdict
         ? {
             decision: outcome.verdict.decision,
@@ -1147,6 +1153,328 @@ export class NexusRuntime implements VesperHost {
     };
   }
 
+  async runExperiment(request: {
+    applicationId: string;
+    repetitions?: number;
+    maxCandidates?: number;
+    practicalThresholdPercent?: number;
+  }): Promise<ExperimentRunResult> {
+    const origin: 'vesper' = 'vesper';
+    const requestedBy = this.requesterId;
+    const applicationId = request.applicationId.trim().toLowerCase();
+    if (!/^[a-z0-9._-]{1,63}$/.test(applicationId)) {
+      return {
+        status: 'blocked',
+        applicationId,
+        fingerprint: null,
+        candidates: [],
+        trials: [],
+        winner: null,
+        scoreMetric: 'frame.1pct_low',
+        score: decideExperiment([]).score,
+        finalOutcomeId: null,
+        detail: 'Application id is malformed.',
+      };
+    }
+
+    if (this.options.config.mode === 'observation' || this.runState === 'observation_only') {
+      return {
+        status: 'blocked',
+        applicationId,
+        fingerprint: null,
+        candidates: [],
+        trials: [],
+        winner: null,
+        scoreMetric: 'frame.1pct_low',
+        score: decideExperiment([]).score,
+        finalOutcomeId: null,
+        detail: this.runState === 'observation_only'
+          ? 'NEXUS is observation-only and cannot run tuner trials.'
+          : 'NEXUS is configured for observation-only operation.',
+      };
+    }
+
+    if (this.platform !== 'win32') {
+      return {
+        status: 'blocked',
+        applicationId,
+        fingerprint: null,
+        candidates: [],
+        trials: [],
+        winner: null,
+        scoreMetric: 'frame.1pct_low',
+        score: decideExperiment([]).score,
+        finalOutcomeId: null,
+        detail: 'The private tuner currently requires Windows power-plan and PresentMon support.',
+      };
+    }
+
+    const inventory = this.inventory;
+    const specialization = specializeTarget(inventory);
+    if (!inventory || !specialization.x3dSchedulingSensitive) {
+      return {
+        status: 'blocked',
+        applicationId,
+        fingerprint: null,
+        candidates: [],
+        trials: [],
+        winner: null,
+        scoreMetric: 'frame.1pct_low',
+        score: decideExperiment([]).score,
+        finalOutcomeId: null,
+        detail: 'The private tuner is currently restricted to the Ryzen 9 9950X3D family.',
+      };
+    }
+
+    // Require the target game to be the current foreground application. This stops
+    // a background Steam process from triggering a long sequence of power changes.
+    const target = await this.resolveFrameTarget(applicationId);
+    const foreground = await getForegroundProcess(this.runner).catch(() => null);
+    if (!target || !foreground?.ok || foreground.value.pid !== target.processId) {
+      return {
+        status: 'blocked',
+        applicationId,
+        fingerprint: null,
+        candidates: [],
+        trials: [],
+        winner: null,
+        scoreMetric: 'frame.1pct_low',
+        score: decideExperiment([]).score,
+        finalOutcomeId: null,
+        detail: 'The requested game is not the observed foreground process; tuner trials were refused.',
+      };
+    }
+
+    if (!this.baseline) {
+      const baseline = await this.captureBaseline();
+      if (!baseline.ok) {
+        return {
+          status: 'failed',
+          applicationId,
+          fingerprint: null,
+          candidates: [],
+          trials: [],
+          winner: null,
+          scoreMetric: 'frame.1pct_low',
+          score: decideExperiment([]).score,
+          finalOutcomeId: null,
+          detail: `Could not establish a baseline: ${baseline.error.message}`,
+        };
+      }
+    }
+
+    await this.eventLog.append({
+      kind: 'experiment.started',
+      severity: 'notice',
+      message: `started private tuner experiment for ${applicationId}`,
+      data: {
+        applicationId,
+        repetitions: Math.max(2, Math.min(4, Math.floor(request.repetitions ?? 3))),
+        maxCandidates: Math.max(2, Math.min(8, request.maxCandidates ?? 6)),
+        controls: [...TRANSACTIONAL_EXPERIMENT_CONTROLS],
+      },
+    });
+
+    const current = await this.currentControlValues();
+    const dimensions = defaultPrivateX3dDimensions(current);
+    const candidates = makeCandidateGrid(dimensions, Math.max(2, Math.min(8, request.maxCandidates ?? 6)));
+    const repetitions = Math.max(2, Math.min(4, Math.floor(request.repetitions ?? 3)));
+    const trials: ExperimentTrialSummary[] = [];
+
+    const scoreFor = (outcome: OptimizationOutcome) => frameScorePercent(outcome.measurements);
+
+    for (const candidate of candidates) {
+      const deltas: number[] = [];
+      const outcomeIds: string[] = [];
+      let stabilityRegression = false;
+
+      for (let repetition = 0; repetition < repetitions; repetition += 1) {
+        const outcome = await this.runOptimization({
+          origin,
+          requestedBy,
+          applicationId,
+          experimentCandidate: candidate.values,
+          transactionalExperiment: true,
+          sandboxPowerPlan: true,
+          rollbackPolicy: 'always',
+        });
+
+        outcomeIds.push(outcome.id);
+        const score = scoreFor(outcome);
+        if (score) deltas.push(score.deltaPercent);
+        stabilityRegression ||= outcome.stabilityRegression === true;
+
+        if (outcome.status === 'applied_unverified' || stabilityRegression || this.runState === 'observation_only') {
+          break;
+        }
+      }
+
+      const decision = decideExperiment(deltas, {
+        practicalThresholdPercent: request.practicalThresholdPercent ?? 1,
+        seed: candidate.id.length * 97 + deltas.length,
+        stabilityRegression,
+      });
+
+      trials.push({
+        candidateId: candidate.id,
+        candidate: candidate.values,
+        repetitions: outcomeIds.length,
+        deltaPercent: deltas,
+        decision,
+        stabilityRegression,
+        outcomeIds,
+      });
+      
+      await this.eventLog.append({
+        kind: 'experiment.trial',
+        severity: stabilityRegression ? 'error' : 'info',
+        message: `candidate ${candidate.id} completed: ${decision.explanation}`,
+        data: {
+          applicationId,
+          candidateId: candidate.id,
+          repetitions: outcomeIds.length,
+          deltaPercent: deltas,
+          keep: decision.keep,
+          stabilityRegression,
+          confidenceLowPercent: decision.score.low,
+          confidenceHighPercent: decision.score.high,
+        },
+      });
+
+      if (stabilityRegression || this.runState === 'observation_only') break;
+    }
+
+    const viable = trials
+      .filter((trial) => trial.decision.keep && !trial.stabilityRegression)
+      .sort((a, b) =>
+        (b.decision.score.low ?? Number.NEGATIVE_INFINITY) - (a.decision.score.low ?? Number.NEGATIVE_INFINITY) ||
+        (b.decision.score.estimate ?? Number.NEGATIVE_INFINITY) - (a.decision.score.estimate ?? Number.NEGATIVE_INFINITY),
+      );
+    const bestTrial = viable[0] ?? null;
+    const winner = bestTrial
+      ? candidates.find((candidate) => candidate.id === bestTrial.candidateId) ?? null
+      : null;
+
+    const primaryGpu = selectPrimaryGpuFromInventory(inventory);
+    const fingerprint = fingerprintExperiment({
+      machine: {
+        cpu: inventory.cpu.model,
+        gpu: primaryGpu?.model ?? null,
+        memoryBytes: inventory.memory.installedBytes,
+      },
+      os: {
+        version: inventory.os.version,
+        build: inventory.os.build,
+      },
+      platform: {
+        driverVersion: primaryGpu?.driverVersion ?? null,
+        biosVersion: null,
+        chipsetVersion: null,
+      },
+      workload: {
+        applicationId,
+        gameBuild: null,
+      },
+    });
+
+    let finalOutcomeId: string | null = null;
+    if (winner) {
+      const finalOutcome = await this.runOptimization({
+        origin,
+        requestedBy,
+        applicationId,
+        experimentCandidate: winner.values,
+        sandboxPowerPlan: true,
+        rollbackPolicy: 'unless_benefit',
+        transactionalExperiment: false,
+        sandboxPowerPlanName: `NEXUS ${applicationId}`,
+      });
+      finalOutcomeId = finalOutcome.id;
+      if (finalOutcome.status !== 'applied_kept') {
+        // A candidate can win the multi-trial comparison and still fail the final
+        // confirmation window. Conservatively report that no durable change won.
+        const record: ExperimentRecord = {
+          id: this.ids.next('exp'),
+          fingerprint,
+          applicationId,
+          candidate: winner.values,
+          decision: 'rollback',
+          scorePercent: bestTrial?.decision.score.estimate ?? null,
+          confidenceLowPercent: bestTrial?.decision.score.low ?? null,
+          confidenceHighPercent: bestTrial?.decision.score.high ?? null,
+          createdAtMs: this.clock.now(),
+          detail: `Winner failed its final verification window: ${finalOutcome.summary}`,
+        };
+        await this.experimentStore.save(record);
+        return {
+          status: 'inconclusive',
+          applicationId,
+          fingerprint,
+          candidates,
+          trials,
+          winner,
+          scoreMetric: bestTrial ? (trials.find((t) => t.candidateId === bestTrial.candidateId)?.decision ? 'frame.1pct_low' : 'frame.1pct_low') : 'frame.1pct_low',
+          score: bestTrial?.decision.score ?? decideExperiment([]).score,
+          finalOutcomeId,
+          detail: `A winner was measured, but its final keep attempt did not pass: ${finalOutcome.summary}`,
+        };
+      }
+    }
+
+    const bestScore = bestTrial?.decision.score ?? decideExperiment([]).score;
+    const decision: ExperimentRecord['decision'] = winner ? 'keep' : 'inconclusive';
+    const record: ExperimentRecord = {
+      id: this.ids.next('exp'),
+      fingerprint,
+      applicationId,
+      candidate: winner?.values ?? {},
+      decision,
+      scorePercent: bestScore.estimate,
+      confidenceLowPercent: bestScore.low,
+      confidenceHighPercent: bestScore.high,
+      createdAtMs: this.clock.now(),
+      detail: winner
+        ? `Measured winner across ${bestTrial?.repetitions ?? repetitions} repetition(s); final outcome ${finalOutcomeId ?? 'none'}.`
+        : `No candidate cleared the practical threshold after ${trials.length} candidate(s).`,
+    };
+    await this.experimentStore.save(record);
+
+    const finalStatus = winner ? 'kept' : 'inconclusive';
+
+    await this.eventLog.append({
+      kind: 'experiment.completed',
+      severity: finalStatus === 'kept' ? 'notice' : 'info',
+      message: winner
+        ? `private tuner selected and verified a winner for ${applicationId}`
+        : `private tuner found no candidate worth keeping for ${applicationId}`,
+      data: {
+        applicationId,
+        status: finalStatus,
+        winner: winner?.id ?? null,
+        scoreMetric: bestTrial ? 'frame.1pct_low' : 'frame.1pct_low',
+        scorePercent: bestScore.estimate,
+        confidenceLowPercent: bestScore.low,
+        confidenceHighPercent: bestScore.high,
+        finalOutcomeId,
+      },
+    });
+
+    return {
+      status: finalStatus,
+      applicationId,
+      fingerprint,
+      candidates,
+      trials,
+      winner,
+      scoreMetric: 'frame.1pct_low',
+      score: bestScore,
+      finalOutcomeId,
+      detail: winner
+        ? `NEXUS measured a credible frame-performance winner for ${applicationId} and applied its final verification pass.`
+        : `NEXUS found no statistically credible ${applicationId} tuner winner worth keeping.`,
+    };
+  }
+
   async runOptimization(request: {
     origin: 'user' | 'vesper' | 'internal';
     requestedBy: string;
@@ -1156,6 +1484,14 @@ export class NexusRuntime implements VesperHost {
     rollbackPolicy?: ExecutionEnvironment['rollbackPolicy'];
     /** Experimental: run power-setting experiments on a duplicated plan. */
     sandboxPowerPlan?: boolean;
+    /** Optional target application for frame evidence. */
+    applicationId?: string;
+    /** Internal experiment candidate; only the dedicated tuner should set this. */
+    experimentCandidate?: Readonly<Record<ControlId, ControlValue>>;
+    /** Marks a temporary trial; never exposed directly over Vesper IPC. */
+    transactionalExperiment?: boolean;
+    /** Human-readable name for a kept sandbox plan. */
+    sandboxPowerPlanName?: string;
   }): Promise<OptimizationOutcome> {
     const workload = await this.analyzeWorkload();
 
@@ -1193,50 +1529,110 @@ export class NexusRuntime implements VesperHost {
       );
     }
 
-    const chosen = request.profileId
-      ? this.profiles.get(request.profileId)
-      : this.profiles.suggestFor(workload.workload, workload.detectedApplicationIds ?? []);
-    if (!chosen) {
+    if (request.transactionalExperiment && !request.sandboxPowerPlan) {
       return this.engine.noAction(
-        'no_proposal_generated',
-        request.profileId
-          ? `There is no profile named "${request.profileId}".`
-          : `No profile targets a ${workload.workload} workload.`,
+        'unsafe',
+        'Temporary tuner trials must run inside an isolated duplicated power plan.',
         workload,
       );
     }
 
-    if (request.profileId === undefined) {
-      const guard = automaticProfileGuard(chosen.profile, specializeTarget(this.inventory));
-      if (guard !== null) {
-        return this.engine.noAction('no_proposal_generated', guard, workload);
-      }
+    if (request.experimentCandidate && request.profileId !== undefined) {
+      return this.engine.noAction(
+        'no_proposal_generated',
+        'A tuner candidate cannot be combined with a named profile.',
+        workload,
+      );
     }
+
+    let chosen = request.profileId
+      ? this.profiles.get(request.profileId)
+      : this.profiles.suggestFor(workload.workload, workload.detectedApplicationIds ?? []);
 
     const current = await this.currentControlValues();
-    const proposed = this.engine.propose({
-      workload,
-      profile: chosen.profile,
-      currentValues: current,
-      origin: request.origin,
-      requestedBy: request.requestedBy,
-    });
+    let proposal: OptimizationProposal;
 
-    if (proposed.kind === 'no_action') {
-      return this.engine.noAction(proposed.reason, proposed.summary, workload);
+    if (request.experimentCandidate) {
+      const entries = Object.entries(request.experimentCandidate);
+      if (entries.length === 0) {
+        return this.engine.noAction('no_proposal_generated', 'The tuner candidate contained no controls.', workload);
+      }
+
+      const invalid = entries.filter(([control]) => !TRANSACTIONAL_EXPERIMENT_CONTROLS.has(control));
+      if (invalid.length > 0) {
+        return this.engine.noAction(
+          'unsafe',
+          `The tuner can only exercise: ${[...TRANSACTIONAL_EXPERIMENT_CONTROLS].join(', ')}.`,
+          workload,
+        );
+      }
+
+      const changes = entries
+        .filter(([control, value]) => !structurallyEqual(current.get(control) ?? null, value))
+        .map(([control, targetValue]) => ({
+          control,
+          targetValue,
+          rationale: 'Bounded private per-game experiment candidate.',
+          expectedEffect: 'Measure frame-time and system evidence under this temporary power policy.',
+        }));
+
+      if (changes.length === 0) {
+        return this.engine.noAction('already_optimal', 'This tuner candidate already matches the current control state.', workload);
+      }
+
+      proposal = {
+        id: this.ids.next('prop'),
+        createdAtMs: this.clock.now(),
+        origin: request.origin,
+        requestedBy: request.requestedBy,
+        workload: workload.workload,
+        changes,
+        profileId: 'experiment',
+        notes: 'private per-game tuner candidate; always rollback unless explicitly selected as the final winner',
+      };
+      chosen = undefined;
+    } else {
+      if (!chosen) {
+        return this.engine.noAction(
+          'no_proposal_generated',
+          request.profileId
+            ? `There is no profile named "${request.profileId}".`
+            : `No profile targets a ${workload.workload} workload.`,
+          workload,
+        );
+      }
+
+      if (request.profileId === undefined) {
+        const guard = automaticProfileGuard(chosen.profile, specializeTarget(this.inventory));
+        if (guard !== null) {
+          return this.engine.noAction('no_proposal_generated', guard, workload);
+        }
+      }
+
+      const proposed = this.engine.propose({
+        workload,
+        profile: chosen.profile,
+        currentValues: current,
+        origin: request.origin,
+        requestedBy: request.requestedBy,
+      });
+
+      if (proposed.kind === 'no_action') {
+        return this.engine.noAction(proposed.reason, proposed.summary, workload);
+      }
+
+      proposal =
+        request.confirmControls && request.origin === 'user'
+          ? {
+              ...proposed.proposal,
+              confirmation: {
+                confirmedAtMs: this.clock.now(),
+                controls: request.confirmControls,
+                acknowledgement: 'confirmed at the NEXUS command line',
+              },
+            }
+          : proposed.proposal;
     }
-
-    const proposal =
-      request.confirmControls && request.origin === 'user'
-        ? {
-            ...proposed.proposal,
-            confirmation: {
-              confirmedAtMs: this.clock.now(),
-              controls: request.confirmControls,
-              acknowledgement: 'confirmed at the NEXUS command line',
-            },
-          }
-        : proposed.proposal;
 
     if (request.dryRun) {
       const verdict = this.kernel.evaluate(proposal, {
@@ -1247,6 +1643,7 @@ export class NexusRuntime implements VesperHost {
         baselineAvailable: this.baseline !== null,
         recentApplications: this.appliedHistory,
         actuatorFidelity: (control) => this.registry.fidelityOf(control),
+        ...(request.transactionalExperiment === undefined ? {} : { transactionalExperiment: request.transactionalExperiment }),
       });
       const outcome: OptimizationOutcome = {
         id: this.ids.next('opt'),
@@ -1290,7 +1687,7 @@ export class NexusRuntime implements VesperHost {
 
     const beforeSystemSummary = summarize(this.telemetry.history(60_000));
     const frameTarget = workload.workload === 'gaming' || workload.workload === 'gpu_bound'
-      ? await this.resolveFrameTarget()
+      ? await this.resolveFrameTarget(request.applicationId)
       : null;
     const beforeFrame = frameTarget && this.platform === 'win32'
       ? await this.presentMon.capture({ processId: frameTarget.processId, seconds: 10 }).catch(() => null)
@@ -1328,6 +1725,26 @@ export class NexusRuntime implements VesperHost {
           },
           onMeasurementWindow: (windowMs) => this.telemetry.enterOptimizationMode(windowMs),
           ...(request.rollbackPolicy === undefined ? {} : { rollbackPolicy: request.rollbackPolicy }),
+          ...(request.transactionalExperiment === undefined ? {} : { transactionalExperiment: request.transactionalExperiment }),
+          ...(stabilityBefore?.ok
+            ? {
+                stabilityCheck: async () => {
+                  const after = await captureWindowsStability(
+                    this.runner,
+                    stabilityBefore.value.capturedAtMs,
+                    this.clock.now(),
+                  ).catch(() => null);
+                  if (!after?.ok) return null;
+                  const delta = diffWindowsStability(stabilityBefore.value, after.value);
+                  return {
+                    unstable: delta.unstable,
+                    detail: delta.unstable
+                      ? `new WHEA/TDR/application-crash evidence: WHEA ${delta.whea}, TDR ${delta.displayTdr}, app crashes ${delta.appCrashes}`
+                      : 'stability oracle observed no new WHEA/TDR/application-crash events while the candidate was active',
+                  };
+                },
+              }
+            : {}),
         },
         this.actuatorContext,
       );
@@ -1348,7 +1765,7 @@ export class NexusRuntime implements VesperHost {
 
     if (powerWorkspace) {
       if (outcome.status === 'applied_kept') {
-        const named = await this.powerSandbox.keep(powerWorkspace, `NEXUS ${workload.workload}`);
+        const named = await this.powerSandbox.keep(powerWorkspace, request.sandboxPowerPlanName ?? `NEXUS ${workload.workload}`);
         if (!named.ok) {
           this.degrade(`Power-plan sandboxed experiment was kept but could not be named: ${named.error.message}`);
         }
@@ -1381,73 +1798,15 @@ export class NexusRuntime implements VesperHost {
       }
     }
 
-    // Stability is an oracle, not a guess: only a successful before/after Event Log
-    // observation may trigger the automatic safety response. Missing Event Log access
-    // never counts as "zero incidents".
-    if (outcome.status === 'applied_kept' && outcome.checkpointId && stabilityBefore?.ok) {
-      const after = await captureWindowsStability(this.runner, stabilityBefore.value.capturedAtMs, this.clock.now()).catch(() => null);
-      if (after?.ok) {
-        const delta = diffWindowsStability(stabilityBefore.value, after.value);
-        await this.eventLog.append({
-          kind: 'stability.observed',
-          severity: delta.unstable ? 'error' : 'info',
-          message: delta.unstable
-            ? `post-optimization stability regression detected (WHEA ${delta.whea}, TDR ${delta.displayTdr}, app crashes ${delta.appCrashes})`
-            : 'post-optimization stability check found no new WHEA/TDR/application crash events',
-          data: {
-            whea: delta.whea,
-            displayTdr: delta.displayTdr,
-            appCrashes: delta.appCrashes,
-            werEvents: delta.werEvents,
-            totalErrors: delta.totalErrors,
-            unstable: delta.unstable,
-          },
-        });
-        if (delta.unstable) {
-          try {
-            const restored = await this.performRollback(outcome.checkpointId, 'internal', 'nexus.stability-oracle');
-            if (restored.complete) {
-              outcome = {
-                ...outcome,
-                status: 'applied_rolled_back',
-                rolledBack: true,
-                finishedAtMs: this.clock.now(),
-                summary: `${outcome.summary} NEXUS automatically rolled the change back after new stability events were detected.`,
-              };
-              this.degrade('The stability oracle detected a post-change WHEA/TDR/application crash and rolled the change back.');
-              this.runState = 'observation_only';
-            } else {
-              outcome = {
-                ...outcome,
-                status: 'applied_unverified',
-                rolledBack: false,
-                finishedAtMs: this.clock.now(),
-                summary: `${outcome.summary} Stability regression was detected, but rollback was incomplete; NEXUS is observation-only.`,
-              };
-              this.degrade('Stability regression detected and rollback was incomplete.');
-              this.runState = 'observation_only';
-            }
-          } catch (error) {
-            this.degrade(`Stability regression detected but automatic rollback was refused: ${error instanceof Error ? error.message : String(error)}`);
-            this.runState = 'observation_only';
-            outcome = {
-              ...outcome,
-              status: 'applied_unverified',
-              rolledBack: false,
-              finishedAtMs: this.clock.now(),
-              summary: `${outcome.summary} Stability regression was detected but NEXUS could not complete its automatic rollback; the system is observation-only.`,
-            };
-          }
-        }
-      }
-    }
 
     this.outcomes.set(outcome.id, outcome);
-    for (const change of outcome.appliedChanges) {
-      this.appliedHistory.push({ control: change.control, appliedAtMs: change.appliedAtMs });
+    if (!request.transactionalExperiment) {
+      for (const change of outcome.appliedChanges) {
+        this.appliedHistory.push({ control: change.control, appliedAtMs: change.appliedAtMs });
+      }
+      this.pruneAppliedHistory();
     }
-    this.pruneAppliedHistory();
-    if (outcome.status === 'applied_kept') {
+    if (outcome.status === 'applied_kept' && chosen) {
       this.activeProfileId = chosen.profile.id;
       this.activeProfileAppliedAtMs = this.clock.now();
       await this.eventLog.append({

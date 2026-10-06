@@ -136,6 +136,8 @@ export interface OptimizationOutcome {
   readonly verdict?: SafetyVerdict;
   readonly appliedChanges: readonly AppliedChange[];
   readonly rolledBack: boolean;
+  /** True only when the Windows stability oracle observed new WHEA/TDR/app-crash evidence. */
+  readonly stabilityRegression?: boolean;
   readonly checkpointId: string | null;
   readonly measurements: readonly MeasurementDelta[];
   readonly summary: string;
