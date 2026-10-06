@@ -23,6 +23,7 @@ import type { SampleContext, TelemetrySource } from '../source.js';
 export interface LibreHardwareMonitorOptions {
   readonly url?: string;
   readonly timeoutMs?: number;
+  readonly fetchImpl?: typeof fetch;
 }
 
 interface SensorLeaf {
@@ -63,8 +64,25 @@ function finiteNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function walk(node: unknown, parents: string[], out: SensorLeaf[]): void {
-  if (!isRecord(node)) return;
+const MAX_SENSOR_NODES = 20_000;
+const MAX_SENSOR_DEPTH = 32;
+
+export function validateLhmPayload(payload: unknown): boolean {
+  if (!isRecord(payload)) return false;
+  let nodes = 0;
+  const visit = (node: unknown, depth: number): boolean => {
+    if (!isRecord(node) || depth > MAX_SENSOR_DEPTH) return false;
+    nodes += 1;
+    if (nodes > MAX_SENSOR_NODES) return false;
+    if (node.Children === undefined) return true;
+    if (!Array.isArray(node.Children)) return false;
+    return node.Children.every((child) => visit(child, depth + 1));
+  };
+  return visit(payload, 0);
+}
+
+function walk(node: unknown, parents: string[], out: SensorLeaf[], depth = 0): void {
+  if (!isRecord(node) || depth > MAX_SENSOR_DEPTH || out.length > MAX_SENSOR_NODES) return;
   const currentText = text(node.Text);
   const nextParents = currentText ? [...parents, currentText] : parents;
   const type = text(node.Type);
@@ -80,7 +98,7 @@ function walk(node: unknown, parents: string[], out: SensorLeaf[]): void {
     });
   }
   if (Array.isArray(node.Children)) {
-    for (const child of node.Children) walk(child, nextParents, out);
+    for (const child of node.Children) walk(child, nextParents, out, depth + 1);
   }
 }
 
@@ -155,11 +173,15 @@ export class LibreHardwareMonitorSource implements TelemetrySource {
   private readonly logger: Logger;
   private readonly url: string;
   private readonly timeoutMs: number;
+  private readonly fetchImpl: typeof fetch;
+  private readonly endpointError: string | null;
 
   constructor(options: LibreHardwareMonitorOptions & { clock?: Clock; logger: Logger }) {
     this.logger = options.logger;
     this.url = (options.url ?? 'http://127.0.0.1:8085').replace(/\/$/, '');
     this.timeoutMs = Math.max(250, Math.min(10_000, options.timeoutMs ?? 1500));
+    this.fetchImpl = options.fetchImpl ?? fetch;
+    this.endpointError = validateLocalLhmEndpoint(this.url);
   }
 
   async sample(context: SampleContext): Promise<readonly Reading[]> {
@@ -168,14 +190,25 @@ export class LibreHardwareMonitorSource implements TelemetrySource {
     const timer = setTimeout(() => controller.abort(), Math.min(this.timeoutMs, context.timeoutMs));
     timer.unref?.();
 
+    if (this.endpointError) {
+      return METRICS.map((metric) => unknownReading({
+        metric,
+        timestampMs,
+        source: this.id,
+        status: 'unsupported',
+        note: this.endpointError,
+      }));
+    }
+
     let payload: unknown;
     try {
-      const response = await fetch(`${this.url}/data.json`, {
+      const response = await this.fetchImpl(`${this.url}/data.json`, {
         signal: controller.signal,
         headers: { accept: 'application/json' },
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       payload = await response.json();
+      if (!validateLhmPayload(payload)) throw new Error('LHM payload failed schema/depth validation');
     } catch (error) {
       this.logger.debug('librehardwaremonitor unavailable', {
         error: error instanceof Error ? error.message : String(error),
@@ -223,4 +256,22 @@ export class LibreHardwareMonitorSource implements TelemetrySource {
 
 export function isLibreHardwareMonitorMetric(metric: MetricId): boolean {
   return (METRICS as readonly string[]).includes(metric);
+}
+
+
+function validateLocalLhmEndpoint(value: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return 'LibreHardwareMonitor endpoint is not a valid URL.';
+  }
+
+  if (url.protocol !== 'http:') return 'LibreHardwareMonitor endpoint must use local HTTP.';
+  if (url.username || url.password) return 'LibreHardwareMonitor endpoint must not contain credentials.';
+  const host = url.hostname.toLowerCase();
+  if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') {
+    return 'LibreHardwareMonitor endpoint must remain on loopback.';
+  }
+  return null;
 }
