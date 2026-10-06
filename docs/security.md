@@ -16,6 +16,9 @@ are:
    that should have failed.
 5. **A mock mistaken for reality.** A simulation reporting success that a human
    or Vesper acts on.
+6. **Privileged persistence drift.** Startup/task configuration points a
+   higher-integrity process at a user-writable runtime, turning ordinary file
+   modification into elevated execution.
 
 Explicitly *not* in the model: an attacker who already has code execution as
 this user. They can read the token, write the sensor bridge file and edit the
@@ -76,6 +79,15 @@ Append-only JSONL, each record carrying the hash of the one before it, chained
 across segment rotations. `nexus audit verify` reports the first point where
 the chain breaks. Detection, not prevention: someone with write access can
 delete the file. They cannot alter it without it showing.
+
+## Privileged startup
+
+The elevated startup path is deliberately isolated from the development checkout.
+When `install-nexus.ps1 -Elevated` is used, the built runtime is copied under
+`%ProgramFiles%\NEXUS` before Task Scheduler is registered. The task then executes
+that protected copy. This follows Windows' run-level model: `Highest` changes the
+security context in which the action runs, so the action target must not remain in
+a user-writable tree. citeturn586758search3turn586758search7
 
 ## What a future campaign should attack
 
