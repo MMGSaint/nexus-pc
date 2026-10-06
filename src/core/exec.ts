@@ -42,6 +42,8 @@ export const ALLOWED_EXECUTABLES: readonly string[] = Object.freeze([
   'schtasks',
   'sc',
   'tasklist',
+  // Mature frame telemetry collector (installed separately; NEXUS only invokes it).
+  'presentmon',
   // POSIX (development host only)
   'uname',
   'lscpu',
