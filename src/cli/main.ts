@@ -22,6 +22,7 @@ import { loadConfig, saveConfig, DEFAULT_CONFIG, OPERATING_MODES } from '../conf
 import type { NexusConfig, OperatingMode } from '../config/config.js';
 import { NEXUS_VERSION, VESPER_CONTRACT_VERSION } from '../version.js';
 import { NexusRuntime } from '../runtime/runtime.js';
+import { EventLog } from '../audit/eventlog.js';
 import { describeInventory } from '../hardware/discovery.js';
 import { summarize } from '../telemetry/summary.js';
 import { tokenFile } from '../vesper/auth.js';
@@ -130,6 +131,11 @@ async function main(argv: readonly string[]): Promise<number> {
   if (args.command === 'controls') return controlsCommand(args);
 
   const logger = createLogger(new StderrSink(), flagBoolean(args, 'verbose') ? 'debug' : 'warn');
+
+  // Audit inspection is filesystem-only. Do not boot hardware discovery,
+  // telemetry, or other background runtime work just to read or verify it.
+  if (args.command === 'audit') return auditCommand(args, paths, logger);
+
   const runtime = new NexusRuntime({ paths, config, clock: systemClock, logger });
 
   const started = await runtime.start();
@@ -357,38 +363,6 @@ async function runCommand(
       }
     }
 
-    case 'audit': {
-      if (args.subcommand === 'tail') {
-        const events = await runtime.auditLog.readAll(flagNumber(args, 'count') ?? 20);
-        if (!events.ok) {
-          process.stderr.write(`Could not read the audit log: ${events.error.message}\n`);
-          return 4;
-        }
-        out(
-          events.value,
-          [
-            heading('Audit log'),
-            ...events.value.map(
-              (e) => `  #${String(e.seq).padStart(5)} ${new Date(e.timestampMs).toISOString()} ${e.severity.padEnd(8)} ${e.kind.padEnd(26)} ${e.message}`,
-            ),
-          ].join('\n'),
-        );
-        return 0;
-      }
-      const verified = await runtime.auditLog.verify();
-      if (!verified.ok) {
-        process.stderr.write(`Could not verify the audit log: ${verified.error.message}\n`);
-        return 4;
-      }
-      out(
-        verified.value,
-        verified.value.valid
-          ? `${heading('Audit log')}\n  Chain intact across ${verified.value.recordsChecked} record(s).`
-          : `${heading('Audit log')}\n  CHAIN BROKEN at record ${verified.value.firstBrokenSeq}: ${verified.value.reason}`,
-      );
-      return verified.value.valid ? 0 : 4;
-    }
-
     case 'vesper': {
       await runtime.waitUntilInitialized();
       const health = runtime.health();
@@ -425,6 +399,60 @@ async function runCommand(
       process.stderr.write(`Unknown command "${args.command}".\n\n${USAGE}`);
       return 2;
   }
+}
+
+async function auditCommand(
+  args: ParsedArgs,
+  paths: ReturnType<typeof resolvePaths>,
+  logger: ReturnType<typeof createLogger>,
+): Promise<number> {
+  const auditLog = new EventLog({
+    paths,
+    clock: systemClock,
+    logger,
+    sessionId: `audit-cli-${process.pid}`,
+  });
+  const opened = await auditLog.open();
+  if (!opened.ok) {
+    process.stderr.write(`Could not open the audit log: ${opened.error.message}\n`);
+    return 4;
+  }
+
+  const json = flagBoolean(args, 'json');
+  const out = (value: unknown, textForm: string): void => {
+    process.stdout.write(json ? `${JSON.stringify(value, null, 2)}\n` : `${textForm}\n`);
+  };
+
+  if (args.subcommand === 'tail') {
+    const events = await auditLog.readAll(flagNumber(args, 'count') ?? 20);
+    if (!events.ok) {
+      process.stderr.write(`Could not read the audit log: ${events.error.message}\n`);
+      return 4;
+    }
+    out(
+      events.value,
+      [
+        heading('Audit log'),
+        ...events.value.map(
+          (e) => `  #${String(e.seq).padStart(5)} ${new Date(e.timestampMs).toISOString()} ${e.severity.padEnd(8)} ${e.kind.padEnd(26)} ${e.message}`,
+        ),
+      ].join('\n'),
+    );
+    return 0;
+  }
+
+  const verified = await auditLog.verify();
+  if (!verified.ok) {
+    process.stderr.write(`Could not verify the audit log: ${verified.error.message}\n`);
+    return 4;
+  }
+  out(
+    verified.value,
+    verified.value.valid
+      ? `${heading('Audit log')}\n  Chain intact across ${verified.value.recordsChecked} record(s).`
+      : `${heading('Audit log')}\n  CHAIN BROKEN at record ${verified.value.firstBrokenSeq}: ${verified.value.reason}`,
+  );
+  return verified.value.valid ? 0 : 4;
 }
 
 /* --------------------------------------------------------------- commands */
