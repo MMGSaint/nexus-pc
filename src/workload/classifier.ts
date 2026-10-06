@@ -45,6 +45,7 @@ export interface ProcessHintTable {
 
 export const DEFAULT_PROCESS_HINTS: ProcessHintTable = Object.freeze({
   gaming: Object.freeze([
+    'wardogsclient',
     'squadgame',
     'squad',
     'wherewindsmeet',
