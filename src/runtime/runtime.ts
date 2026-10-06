@@ -24,11 +24,12 @@ import type { IdSource } from '../core/ids.js';
 import { systemIds } from '../core/ids.js';
 import type { Logger } from '../core/logger.js';
 import type { NexusPaths } from '../core/paths.js';
-import { allDirectories } from '../core/paths.js';
+import { allDirectories, ipcEndpoint } from '../core/paths.js';
 import { ensureDir } from '../core/fsx.js';
 import type { Result } from '../core/result.js';
 import { err, ok } from '../core/result.js';
 import { NEXUS_VERSION } from '../version.js';
+import { structurallyEqual } from '../core/canonical-json.js';
 
 import type { CapabilityRecord } from '../domain/capability.js';
 import type { ControlId, ControlValue } from '../domain/control.js';
@@ -86,7 +87,7 @@ import { createProcessEnumerator } from '../process/enumerate.js';
 import { getForegroundProcess } from '../process/windows-native.js';
 import type { ProcessEnumerator } from '../process/enumerate.js';
 import { WorkloadClassifier, signalsFromSnapshot } from '../workload/classifier.js';
-import { decideExperiment, defaultPrivateX3dDimensions, fingerprintExperiment, makeCandidateGrid, frameScorePercent, type ExperimentCandidate, type ExperimentRunResult, type ExperimentTrialSummary } from '../optimizer/experiment-plan.js';
+import { decideExperiment, defaultPrivateX3dDimensions, fingerprintExperiment, makeCandidateGrid, frameScorePercent, type ExperimentRunResult, type ExperimentTrialSummary } from '../optimizer/experiment-plan.js';
 import { ExperimentStore, type ExperimentRecord } from '../optimizer/experiment-store.js';
 import { ensureToken } from '../vesper/auth.js';
 import type { ProfileView, RecommendationView, VesperHost } from '../vesper/handlers.js';
@@ -536,7 +537,7 @@ export class NexusRuntime implements VesperHost {
       const token = await ensureToken(this.options.paths, this.ids);
       if (!token.ok) throw token.error;
       const explicitPipe = this.platform === 'win32' ? this.options.config.vesper.pipeName : null;
-      const endpoint = explicitPipe ?? ipcEndpointForToken(this.options.paths, token.value, this.platform);
+      const endpoint = explicitPipe ?? ipcEndpoint(this.options.paths, this.platform);
       const server = new VesperServer({
         paths: this.options.paths,
         clock: this.clock,
@@ -1302,6 +1303,28 @@ export class NexusRuntime implements VesperHost {
       }
     }
 
+    const primaryGpu = selectPrimaryGpuFromInventory(inventory);
+    const fingerprint = fingerprintExperiment({
+      machine: {
+        cpu: inventory.cpu.model,
+        gpu: primaryGpu?.model ?? null,
+        memoryBytes: inventory.memory.installedBytes,
+      },
+      os: {
+        version: inventory.os.version,
+        build: inventory.os.build,
+      },
+      platform: {
+        driverVersion: primaryGpu?.driverVersion ?? null,
+        biosVersion: null,
+        chipsetVersion: null,
+      },
+      workload: {
+        applicationId,
+        gameBuild: null,
+      },
+    });
+
     await this.eventLog.append({
       kind: 'experiment.started',
       severity: 'notice',
@@ -1355,7 +1378,8 @@ export class NexusRuntime implements VesperHost {
           });
           break;
         }
-        if (stabilityRegression || this.runState === 'observation_only') {
+        const stateAfterOutcome: RunState = this.runState;
+        if (stabilityRegression || stateAfterOutcome === 'observation_only') {
           break;
         }
       }
@@ -1392,7 +1416,8 @@ export class NexusRuntime implements VesperHost {
         },
       });
 
-      if (stabilityRegression || this.runState === 'observation_only') break;
+      const stateAfterTrial: RunState = this.runState;
+      if (stabilityRegression || stateAfterTrial === 'observation_only') break;
     }
 
     if (this.runState === 'observation_only') {
@@ -1421,28 +1446,6 @@ export class NexusRuntime implements VesperHost {
     const winner = bestTrial
       ? candidates.find((candidate) => candidate.id === bestTrial.candidateId) ?? null
       : null;
-
-    const primaryGpu = selectPrimaryGpuFromInventory(inventory);
-    const fingerprint = fingerprintExperiment({
-      machine: {
-        cpu: inventory.cpu.model,
-        gpu: primaryGpu?.model ?? null,
-        memoryBytes: inventory.memory.installedBytes,
-      },
-      os: {
-        version: inventory.os.version,
-        build: inventory.os.build,
-      },
-      platform: {
-        driverVersion: primaryGpu?.driverVersion ?? null,
-        biosVersion: null,
-        chipsetVersion: null,
-      },
-      workload: {
-        applicationId,
-        gameBuild: null,
-      },
-    });
 
     let finalOutcomeId: string | null = null;
     if (winner) {
