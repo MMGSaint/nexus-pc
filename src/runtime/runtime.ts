@@ -164,6 +164,7 @@ export class NexusRuntime implements VesperHost {
   private readonly appliedHistory: { control: ControlId; appliedAtMs: number }[] = [];
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private optimizationInFlight = false;
+  private performanceEvidenceInFlight = false;
   private shuttingDown = false;
   private backgroundInit: Promise<void> | null = null;
 
@@ -1061,14 +1062,24 @@ export class NexusRuntime implements VesperHost {
     const telemetry = summarize(this.telemetry.history(boundedMs));
     const frameTarget = this.platform === 'win32' ? await this.resolveFrameTarget(applicationId) : null;
     let frame: FramePerformanceSummary | null = null;
+    let frameCaptureBlocked = false;
 
     if (frameTarget && this.platform === 'win32') {
-      const seconds = Math.max(1, Math.min(10, Math.ceil(boundedMs / 1000)));
-      const captured = await this.presentMon.capture({
+      // PresentMon is itself a workload. Running it during an optimization experiment
+      // contaminates the measurement window and can perturb CPU scheduling/IO. Also keep
+      // captures single-flight across callers so multiple dashboards cannot stack them.
+      if (this.optimizationInFlight || this.performanceEvidenceInFlight) {
+        frameCaptureBlocked = true;
+      } else {
+        this.performanceEvidenceInFlight = true;
+        const seconds = Math.max(1, Math.min(10, Math.ceil(boundedMs / 1000)));
+        const captured = await this.presentMon.capture({
         processId: frameTarget.processId,
         seconds,
-      });
-      if (captured.ok) frame = captured.value.summary;
+        });
+        if (captured.ok) frame = captured.value.summary;
+        this.performanceEvidenceInFlight = false;
+      }
     }
 
     return {
@@ -1077,7 +1088,13 @@ export class NexusRuntime implements VesperHost {
       frame,
       frameTarget,
       topologyAware: this.platform === 'win32' && this.capabilities.get('cpu.topology')?.state === 'available',
-      fidelity: frame && telemetry.fidelity === 'live' ? 'live' : telemetry.fidelity,
+      // If a frame target existed but capture was suppressed/failed, do not let live
+      // system telemetry masquerade as a complete live performance evidence bundle.
+      fidelity: frame && telemetry.fidelity === 'live'
+        ? 'live'
+        : frameTarget !== null && frameCaptureBlocked
+          ? 'unavailable'
+          : telemetry.fidelity,
     };
   }
 
