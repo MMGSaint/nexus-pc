@@ -34,7 +34,7 @@ import type {
 import type { TelemetrySnapshot } from '../domain/telemetry.js';
 import { isKnown } from '../domain/telemetry.js';
 import { getControl } from './controls.js';
-import type { SafetyPolicy } from './policy.js';
+import { TRANSACTIONAL_EXPERIMENT_CONTROLS, type SafetyPolicy } from './policy.js';
 import { policyDigest } from './policy.js';
 import { scanForAuthorityClaims } from './guards.js';
 
@@ -58,6 +58,8 @@ export interface SafetyContext {
    * recorded so the resulting outcome can never be reported as live.
    */
   readonly actuatorFidelity: (control: ControlId) => Fidelity;
+  /** Internal-only marker for bounded temporary tuner trials. */
+  readonly transactionalExperiment?: boolean;
 }
 
 const RUN_STATES_PERMITTING_WRITES: ReadonlySet<RunState> = new Set<RunState>(['ready', 'degraded']);
@@ -202,6 +204,17 @@ export class SafetyKernel {
         block('DUPLICATE_CONTROL', `Control "${change.control}" appears more than once.`, change.control);
       }
       seen.add(change.control);
+    }
+
+    if (context.transactionalExperiment === true) {
+      for (const change of proposal.changes) {
+        if (!TRANSACTIONAL_EXPERIMENT_CONTROLS.has(change.control)) {
+          block(
+            'EXPERIMENT_CONTROL_NOT_ALLOWED',
+            `"${change.control}" is not approved for temporary tuner trials.`,
+          );
+        }
+      }
     }
 
     const windowStart = context.nowMs - 3_600_000;
