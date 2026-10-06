@@ -12,7 +12,7 @@ import { readFile, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { CommandRunner } from '../core/exec.js';
-import type { NexusError } from '../core/errors.js';
+import { nexusError, type NexusError } from '../core/errors.js';
 import { err, ok } from '../core/result.js';
 import type { Result } from '../core/result.js';
 import type { NexusPaths } from '../core/paths.js';
