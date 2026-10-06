@@ -1,4 +1,4 @@
-| `gaming` | gaming, GPU-bound | floor 20%, ceiling 100%, all cores unparked, aggressive boost (generic baseline; private X3D target does not auto-select this while CCD validation is absent) |# Profiles
+# Profiles
 
 A profile is a **complete, explicit** list of the controls it changes. There is
 no "and some tuning" clause: if a setting is not in `settings`, applying the
