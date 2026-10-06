@@ -57,7 +57,7 @@ async function call(
   runner: CommandRunner,
   request: Record<string, unknown>,
   options?: NativeWindowsHelperOptions,
-): Promise<Result<Record<string, unknown>, NexusError>> {
+): Promise<Result<unknown, NexusError>> {
   const result = await runner.run({
     file: helperName(options),
     args: [],
@@ -75,11 +75,7 @@ async function call(
   if (parsed.value['ok'] !== true) {
     return err(nexusError('E_UNAVAILABLE', String(parsed.value['error'] ?? 'native Windows helper refused the request')));
   }
-  const payload = parsed.value['result'];
-  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
-    return err(nexusError('E_IO', 'native Windows helper returned an invalid result payload'));
-  }
-  return ok(payload as Record<string, unknown>);
+  return ok(parsed.value['result']);
 }
 
 function finiteInt(value: unknown): number | null {
@@ -136,10 +132,14 @@ export async function getForegroundProcess(
 ): Promise<Result<ForegroundProcess, NexusError>> {
   const result = await call(runner, { command: 'foreground' }, options);
   if (!result.ok) return result;
+  if (typeof result.value !== 'object' || result.value === null || Array.isArray(result.value)) {
+    return err(nexusError('E_IO', 'native foreground payload was not an object'));
+  }
+  const payload = result.value as Record<string, unknown>;
   return ok({
-    available: result.value['available'] === true,
-    pid: finiteInt(result.value['pid']),
-    processName: typeof result.value['processName'] === 'string' ? result.value['processName'] : null,
+    available: payload['available'] === true,
+    pid: finiteInt(payload['pid']),
+    processName: typeof payload['processName'] === 'string' ? payload['processName'] : null,
   });
 }
 
@@ -151,10 +151,14 @@ export async function getProcessDefaultCpuSets(
   if (!Number.isSafeInteger(pid) || pid <= 0) return err(nexusError('E_INVALID_INPUT', 'pid must be a positive integer'));
   const result = await call(runner, { command: 'get-default-cpu-sets', pid }, options);
   if (!result.ok) return result;
-  const ids = Array.isArray(result.value['ids'])
-    ? result.value['ids'].filter((x): x is number => typeof x === 'number' && Number.isSafeInteger(x) && x > 0).sort((a,b)=>a-b)
+  if (typeof result.value !== 'object' || result.value === null || Array.isArray(result.value)) {
+    return err(nexusError('E_IO', 'native CPU-set payload was not an object'));
+  }
+  const payload = result.value as Record<string, unknown>;
+  const ids = Array.isArray(payload['ids'])
+    ? payload['ids'].filter((x): x is number => typeof x === 'number' && Number.isSafeInteger(x) && x >= 0).sort((a,b)=>a-b)
     : [];
-  return ok({ pid, ids, explicitlyAssigned: result.value['explicitlyAssigned'] === true });
+  return ok({ pid, ids, explicitlyAssigned: payload['explicitlyAssigned'] === true });
 }
 
 export async function setProcessDefaultCpuSets(
@@ -165,7 +169,7 @@ export async function setProcessDefaultCpuSets(
 ): Promise<Result<DefaultCpuSets, NexusError>> {
   if (!Number.isSafeInteger(pid) || pid <= 0) return err(nexusError('E_INVALID_INPUT', 'pid must be a positive integer'));
   if (ids.length > 256 || ids.some((id) => !Number.isSafeInteger(id) || id < 0)) {
-    return err(nexusError('E_INVALID_INPUT', 'CPU Set IDs must be positive integers and the list may contain at most 256 IDs'));
+    return err(nexusError('E_INVALID_INPUT', 'CPU Set IDs must be non-negative integers and the list may contain at most 256 IDs'));
   }
   const unique = [...new Set(ids)].sort((a,b)=>a-b);
   const result = await call(runner, { command: 'set-default-cpu-sets', pid, cpuSetIds: unique }, options);
