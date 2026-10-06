@@ -60,6 +60,23 @@ export const ALLOWED_EXECUTABLES: readonly string[] = Object.freeze([
 
 const ALLOWED = new Set(ALLOWED_EXECUTABLES);
 
+const WINDOWS_SYSTEM_EXECUTABLES = new Set([
+  'powershell',
+  'powercfg',
+  'reg',
+  'schtasks',
+  'sc',
+  'tasklist',
+]);
+
+function trustedWindowsSystemPath(file: string): string | null {
+  if (process.platform !== 'win32') return null;
+  const basename = path.basename(file).toLowerCase().replace(/\.exe$/, '');
+  if (!WINDOWS_SYSTEM_EXECUTABLES.has(basename)) return null;
+  const root = process.env.SystemRoot ?? 'C:\\Windows';
+  return path.join(root, 'System32', `${basename}.exe`);
+}
+
 export interface CommandRequest {
   readonly file: string;
   readonly args: readonly string[];
@@ -212,6 +229,15 @@ async function resolveExecutablePath(request: CommandRequest): Promise<Result<st
   const absolute = path.isAbsolute(request.file);
   if (request.requireAbsolutePath && !absolute) {
     return err(nexusError('E_INVALID_INPUT', 'this executable must be supplied as an absolute path; PATH lookup is forbidden'));
+  }
+
+  if (!absolute && process.platform === 'win32') {
+    const systemPath = trustedWindowsSystemPath(request.file);
+    if (systemPath) return ok(systemPath);
+    // Third-party / helper binaries must never be allowed to fall through to PATH.
+    if (isAllowedExecutable(request.file)) {
+      return err(nexusError('E_INVALID_INPUT', 'non-system Windows executables must use an explicit absolute trusted path'));
+    }
   }
 
   if (request.expectedSha256 !== undefined) {
