@@ -130,12 +130,23 @@ export function isAllowedExecutable(file: string): boolean {
 }
 
 /** Resolve a bare allowlisted Windows system tool without consulting PATH. */
-export function resolveTrustedSystemExecutable(file: string): string | null {
-  if (process.platform !== 'win32') return null;
+export function resolveTrustedSystemExecutable(
+  file: string,
+  platform: NodeJS.Platform = process.platform,
+  systemRoot: string = process.env.SystemRoot ?? 'C:\\Windows',
+): string | null {
+  if (platform !== 'win32') return null;
   const basename = executableBasename(file);
   if (!WINDOWS_SYSTEM_EXECUTABLES.has(basename)) return null;
-  const root = process.env.SystemRoot ?? 'C:\\Windows';
-  return path.join(root, 'System32', `${basename}.exe`);
+
+  // Windows PowerShell 5.1 is installed under the WindowsPowerShell\\v1.0
+  // subdirectory rather than directly under System32. Keep the path explicit:
+  // NEXUS must not fall back to PATH for a system executable.
+  if (basename === 'powershell') {
+    return path.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+  }
+
+  return path.join(systemRoot, 'System32', `${basename}.exe`);
 }
 
 export class NodeCommandRunner implements CommandRunner {
