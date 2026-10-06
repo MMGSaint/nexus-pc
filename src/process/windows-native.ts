@@ -40,8 +40,7 @@ function helperName(options?: NativeWindowsHelperOptions): string {
 }
 
 function parseObject(stdout: string): Result<Record<string, unknown>, NexusError> {
-  const line = stdout.replace(/^﻿/, '').trim().split(/?
-/)[0]?.trim() ?? '';
+  const line = stdout.replace(/^\uFEFF/, '').trim().split(/\r?\n/)[0]?.trim() ?? '';
   if (!line) return err(nexusError('E_UNAVAILABLE', 'native Windows helper produced no output'));
   try {
     const parsed: unknown = JSON.parse(line);
