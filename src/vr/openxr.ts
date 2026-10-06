@@ -15,15 +15,15 @@ export interface OpenXrRuntimeIdentity {
 
 const SCRIPT = [
   '$paths = @()',
-  '$hkcu = Get-ItemProperty -Path ''Registry::HKEY_CURRENT_USER\\Software\\Khronos\\OpenXR\\1'' -Name ActiveRuntime -ErrorAction SilentlyContinue',
-  '$hklm = Get-ItemProperty -Path ''Registry::HKEY_LOCAL_MACHINE\\SOFTWARE\\Khronos\\OpenXR\\1'' -Name ActiveRuntime -ErrorAction SilentlyContinue',
+  `$hkcu = Get-ItemProperty -Path 'Registry::HKEY_CURRENT_USER\\Software\\Khronos\\OpenXR\\1' -Name ActiveRuntime -ErrorAction SilentlyContinue`,
+  `$hklm = Get-ItemProperty -Path 'Registry::HKEY_LOCAL_MACHINE\\SOFTWARE\\Khronos\\OpenXR\\1' -Name ActiveRuntime -ErrorAction SilentlyContinue`,
   'if ($hkcu -and $hkcu.ActiveRuntime) { $paths += [string]$hkcu.ActiveRuntime }',
   'if ($hklm -and $hklm.ActiveRuntime) { $paths += [string]$hklm.ActiveRuntime }',
   '$path = $paths | Select-Object -First 1',
   '$exists = $false',
   '$name = $null',
   'if ($path) { $exists = Test-Path -LiteralPath $path; if ($exists) { try { $m = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json; if ($m.runtime.name) { $name = [string]$m.runtime.name } } catch {} } }',
-  '[pscustomobject]@{ active = [bool]$path; manifestPath = if ($path) { [string]$path } else { $null }; name = $name; manifestExists = [bool]$exists; source = if ($hkcu -and $path -eq [string]$hkcu.ActiveRuntime) { ''registry'' } elseif ($hklm -and $path -eq [string]$hklm.ActiveRuntime) { ''registry'' } else { ''unavailable'' } } | ConvertTo-Json -Compress',
+  '[pscustomobject]@{ active = [bool]$path; manifestPath = if ($path) { [string]$path } else { $null }; name = $name; manifestExists = [bool]$exists; source = if ($hkcu -and $path -eq [string]$hkcu.ActiveRuntime) { 'registry' } elseif ($hklm -and $path -eq [string]$hklm.ActiveRuntime) { 'registry' } else { 'unavailable' } } | ConvertTo-Json -Compress',
 ].join('; ');
 
 export async function readOpenXrRuntime(runner: CommandRunner): Promise<Result<OpenXrRuntimeIdentity, NexusError>> {
