@@ -17,7 +17,6 @@ import { err, ok } from '../core/result.js';
 import type { Result } from '../core/result.js';
 import type { NexusPaths } from '../core/paths.js';
 import { ensureDir } from '../core/fsx.js';
-import { randomHex } from '../core/ids.js';
 import {
   summarizeFrames,
   type FramePerformanceSummary,
@@ -96,20 +95,20 @@ export function parsePresentMonCsv(csv: string): FrameSample[] {
     const frameTime = parseNumber(row.FrameTime) ?? parseNumber(row.MsBetweenPresents);
     if (frameTime === null || frameTime <= 0 || frameTime > 10_000) continue;
 
-    const gpuTimeMs = parseNumber(row.GPUTime) ?? parseNumber(row.msGPUActive) ?? undefined;
-    const cpuBusyMs = parseNumber(row.CPUBusy) ?? parseNumber(row.msCPUBusy) ?? undefined;
+    const gpuTimeMs = parseNumber(row.GPUTime) ?? parseNumber(row.msGPUActive);
+    const cpuBusyMs = parseNumber(row.CPUBusy) ?? parseNumber(row.msCPUBusy);
     const displayLatencyMs =
       parseNumber(row.MsUntilDisplayed) ??
       parseNumber(row.DisplayLatency) ??
-      parseNumber(row.msUntilDisplayed) ??
-      undefined;
+      parseNumber(row.msUntilDisplayed);
+    const dropped = parseBoolDropped(row);
 
     samples.push({
       frameTimeMs: frameTime,
-      ...(gpuTimeMs === undefined ? {} : { gpuTimeMs }),
-      ...(cpuBusyMs === undefined ? {} : { cpuBusyMs }),
-      ...(displayLatencyMs === undefined ? {} : { displayLatencyMs }),
-      ...(parseBoolDropped(row) === undefined ? {} : { dropped: parseBoolDropped(row) }),
+      ...(gpuTimeMs === null ? {} : { gpuTimeMs }),
+      ...(cpuBusyMs === null ? {} : { cpuBusyMs }),
+      ...(displayLatencyMs === null ? {} : { displayLatencyMs }),
+      ...(dropped === undefined ? {} : { dropped }),
     });
   }
   return samples;
@@ -128,25 +127,13 @@ export class PresentMonCollector {
   async capture(input: PresentMonCaptureRequest): Promise<Result<PresentMonCaptureResult, NexusError>> {
     const seconds = Math.max(ALLOWED_SECONDS_MIN, Math.min(ALLOWED_SECONDS_MAX, Math.round(input.seconds)));
     if (input.processId === undefined && !input.processName) {
-      return err({
-        code: 'E_INVALID_INPUT',
-        message: 'PresentMon capture requires a target process id or executable name.',
-        retryable: false,
-      } as NexusError);
+      return err(nexusError('E_INVALID_INPUT', 'PresentMon capture requires a target process id or executable name.'));
     }
     if (input.processId !== undefined && (!Number.isInteger(input.processId) || input.processId <= 0)) {
-      return err({
-        code: 'E_INVALID_INPUT',
-        message: 'PresentMon processId must be a positive integer.',
-        retryable: false,
-      } as NexusError);
+      return err(nexusError('E_INVALID_INPUT', 'PresentMon processId must be a positive integer.'));
     }
     if (input.processName && !/^[A-Za-z0-9_. -]{1,128}$/.test(input.processName)) {
-      return err({
-        code: 'E_INVALID_INPUT',
-        message: 'PresentMon processName contains unsupported characters.',
-        retryable: false,
-      } as NexusError);
+      return err(nexusError('E_INVALID_INPUT', 'PresentMon processName contains unsupported characters.'));
     }
 
     await ensureDir(this.paths.runtime);
@@ -179,21 +166,13 @@ export class PresentMonCollector {
 
     try {
       if (started.value.code !== 0) {
-        return err({
-          code: 'E_IO',
-          message: `PresentMon exited with code ${started.value.code ?? 'unknown'}: ${started.value.stderr.trim() || 'no error text'}`,
-          retryable: false,
-        } as NexusError);
+        return err(nexusError('E_IO', `PresentMon exited with code ${started.value.code ?? 'unknown'}: ${started.value.stderr.trim() || 'no error text'}`));
       }
       let csv: string;
       try {
         csv = await readFile(csvPath, 'utf8');
       } catch (error) {
-        return err({
-          code: 'E_UNAVAILABLE',
-          message: `PresentMon completed but no CSV was found at ${csvPath}: ${error instanceof Error ? error.message : String(error)}`,
-          retryable: true,
-        } as NexusError);
+        return err(nexusError('E_UNAVAILABLE', `PresentMon completed but no CSV was found at ${csvPath}: ${error instanceof Error ? error.message : String(error)}`));
       }
       const samples = parsePresentMonCsv(csv);
       return ok({
