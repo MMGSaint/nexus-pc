@@ -47,6 +47,7 @@ export const EVENT_KINDS = [
   'power.sandbox.restored',
   'experiment.started',
   'experiment.trial',
+  'experiment.aborted',
   'experiment.completed',
   'checkpoint.created',
   'checkpoint.restored',

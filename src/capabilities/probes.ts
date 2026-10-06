@@ -53,6 +53,9 @@ export interface ProbeSources {
   /** Live process enumerator; probed rather than assumed from code existence. */
   readonly processEnumerator: ProcessEnumerator;
   readonly runner: CommandRunner;
+  /** Trusted third-party PresentMon executable and SHA-256 pin, from config. */
+  readonly presentMonPath: string | null;
+  readonly presentMonSha256: string | null;
 }
 
 /** Telemetry capabilities and the metric each one depends on. */
@@ -288,8 +291,18 @@ export function buildCapabilityProbes(sources: () => ProbeSources): CapabilityPr
     probe: async (): Promise<ProbeOutcome> => {
       const { runner, platform } = sources();
       if (platform !== 'win32') return { state: 'unsupported', detail: 'PresentMon capture is currently Windows-only' };
+      const presentMonPath = sources().presentMonPath;
+      const presentMonSha256 = sources().presentMonSha256;
+      if (!presentMonPath || !presentMonSha256) {
+        return {
+          state: 'unavailable',
+          detail: 'PresentMon is not configured with an absolute executable path and SHA-256 trust pin',
+        };
+      }
       const result = await runner.run({
-        file: 'PresentMon.exe',
+        file: presentMonPath,
+        requireAbsolutePath: true,
+        expectedSha256: presentMonSha256,
         args: ['--version'],
         timeoutMs: 5_000,
         maxOutputBytes: 64 * 1024,
