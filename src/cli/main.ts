@@ -69,6 +69,7 @@ Options
   --simulate FIXTURE        Run against a hardware fixture (target-desktop, minimal-unknown)
   --dry-run                 For optimize: validate and report, change nothing
   --require-benefit         For optimize: roll back unless a benefit is measured
+  --sandbox-power-plan      For optimize: experiment on a duplicated Windows power plan
   --confirm CONTROL[,...]   Supply an explicit human confirmation for controls
   --seconds N               For observe/run: how long to run
 `;
@@ -292,6 +293,7 @@ async function runCommand(
         ...(flagBoolean(args, 'dry-run') ? { dryRun: true } : {}),
         ...(confirm ? { confirmControls: confirm.split(',').map((c) => c.trim()) } : {}),
         ...(flagBoolean(args, 'require-benefit') ? { rollbackPolicy: 'unless_benefit' as const } : {}),
+        ...(flagBoolean(args, 'sandbox-power-plan') ? { sandboxPowerPlan: true } : {}),
       });
       out(outcome, formatOutcome(outcome));
       return outcome.status === 'failed' || outcome.status === 'applied_unverified' ? 4 : 0;
