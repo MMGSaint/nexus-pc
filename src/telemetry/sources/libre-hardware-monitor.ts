@@ -64,6 +64,23 @@ function finiteNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function finiteBytes(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return null;
+  const normalized = value.replace(/,/g, '.').trim().toUpperCase();
+  const match = normalized.match(/([-+]?\d+(?:\.\d+)?)\s*(B|KB|KIB|MB|MIB|GB|GIB|TB|TIB)?/);
+  if (!match?.[1]) return null;
+  const n = Number(match[1]);
+  if (!Number.isFinite(n)) return null;
+  const unit = match[2] ?? 'B';
+  const factor = unit === 'TB' || unit === 'TIB' ? 1024 ** 4
+    : unit === 'GB' || unit === 'GIB' ? 1024 ** 3
+    : unit === 'MB' || unit === 'MIB' ? 1024 ** 2
+    : unit === 'KB' || unit === 'KIB' ? 1024
+    : 1;
+  return n * factor;
+}
+
 const MAX_SENSOR_NODES = 20_000;
 const MAX_SENSOR_DEPTH = 32;
 
@@ -87,7 +104,8 @@ function walk(node: unknown, parents: string[], out: SensorLeaf[], depth = 0): v
   const nextParents = currentText ? [...parents, currentText] : parents;
   const type = text(node.Type);
   const sensorId = text(node.SensorId);
-  const value = finiteNumber(node.Value);
+  const numericValue = node.Type && String(node.Type).toLowerCase() === 'data' ? finiteBytes(node.Value) : finiteNumber(node.Value);
+  const value = numericValue;
   if (sensorId && type && value !== null) {
     out.push({
       id: sensorId,
