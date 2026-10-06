@@ -795,7 +795,7 @@ export class NexusRuntime implements VesperHost {
     const workload = await this.analyzeWorkload();
     const chosen = profileId
       ? this.profiles.get(profileId)
-      : this.profiles.suggestFor(workload.workload);
+      : this.profiles.suggestFor(workload.workload, workload.detectedApplicationIds ?? []);
 
     if (!chosen) {
       return {
