@@ -41,21 +41,6 @@ discovery, telemetry, baseline and rollback have been checked on this machine.
 
 ---
 
-```powershell
-.\scripts\windows\install-nexus.ps1
-```
-
-Registers a logon task at normal privilege. Do **not** pass `-Elevated` yet —
-first find out what NEXUS can do without it.
-
-Verify:
-
-```powershell
-Get-ScheduledTask -TaskName NEXUS
-```
-
----
-
 ## 2. Discover hardware
 
 ```powershell
@@ -236,7 +221,7 @@ one controlled change has been measured, and rollback has been proven.
 
 ## What to report back
 
-If anything in steps 2–4 or 12 does not match, capture:
+If anything in steps 2–4, 9, 12, or the startup registration does not match, capture:
 
 ```powershell
 node dist\cli\main.js doctor --json  > nexus-doctor.json
