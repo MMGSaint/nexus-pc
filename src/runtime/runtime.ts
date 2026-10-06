@@ -71,7 +71,7 @@ import { OsMemorySource } from '../telemetry/sources/os-memory.js';
 import { SelfTelemetrySource } from '../telemetry/sources/self.js';
 import { SensorBridgeSource } from '../telemetry/sources/sensor-bridge.js';
 import { LibreHardwareMonitorSource } from '../telemetry/sources/libre-hardware-monitor.js';
-import { probeCoreinfoTopology, type X3dTopology } from '../hardware/coreinfo-topology.js';
+import { probeCoreinfoTopology } from '../hardware/coreinfo-topology.js';
 import { PresentMonCollector } from '../performance/presentmon.js';
 import { captureWindowsStability, diffWindowsStability } from '../stability/windows-event-oracle.js';
 import { WindowsTelemetrySource } from '../telemetry/sources/windows.js';
