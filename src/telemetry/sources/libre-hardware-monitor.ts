@@ -17,20 +17,12 @@
 import type { Clock } from '../../core/clock.js';
 import type { Logger } from '../../core/logger.js';
 import type { MetricId, Reading } from '../../domain/telemetry.js';
-import { METRIC_IDS, reading, unknownReading } from '../../domain/telemetry.js';
+import { reading, unknownReading } from '../../domain/telemetry.js';
 import type { SampleContext, TelemetrySource } from '../source.js';
 
 export interface LibreHardwareMonitorOptions {
   readonly url?: string;
   readonly timeoutMs?: number;
-}
-
-interface LhmNode {
-  readonly Text?: unknown;
-  readonly Type?: unknown;
-  readonly Value?: unknown;
-  readonly SensorId?: unknown;
-  readonly Children?: unknown;
 }
 
 interface SensorLeaf {
@@ -160,13 +152,11 @@ export class LibreHardwareMonitorSource implements TelemetrySource {
   readonly trust = 'live' as const;
   readonly metrics = METRICS;
 
-  private readonly clock: Clock;
   private readonly logger: Logger;
   private readonly url: string;
   private readonly timeoutMs: number;
 
-  constructor(options: LibreHardwareMonitorOptions & { clock: Clock; logger: Logger }) {
-    this.clock = options.clock;
+  constructor(options: LibreHardwareMonitorOptions & { clock?: Clock; logger: Logger }) {
     this.logger = options.logger;
     this.url = (options.url ?? 'http://127.0.0.1:8085').replace(/\/$/, '');
     this.timeoutMs = Math.max(250, Math.min(10_000, options.timeoutMs ?? 1500));
