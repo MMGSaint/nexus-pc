@@ -1907,7 +1907,11 @@ export class NexusRuntime implements VesperHost {
     if (this.platform !== 'win32') {
       return { ok: false as const, error: nexusError('E_UNSUPPORTED', 'X3D topology probing is currently Windows-only') };
     }
-    return probeCoreinfoTopology(this.runner);
+    return probeCoreinfoTopology(
+      this.runner,
+      this.options.config.tools.coreInfoPath,
+      this.options.config.tools.coreInfoSha256,
+    );
   }
 
   get capabilityRegistry(): CapabilityRegistry {
