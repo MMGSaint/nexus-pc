@@ -230,13 +230,14 @@ export class LibreHardwareMonitorSource implements TelemetrySource {
     const timer = setTimeout(() => controller.abort(), Math.min(this.timeoutMs, context.timeoutMs));
     timer.unref?.();
 
-    if (this.endpointError) {
+    const endpointError = this.endpointError;
+    if (endpointError) {
       return METRICS.map((metric) => unknownReading({
         metric,
         timestampMs,
         source: this.id,
         status: 'unsupported',
-        note: this.endpointError,
+        note: endpointError,
       }));
     }
 
