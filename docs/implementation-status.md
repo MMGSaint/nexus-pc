@@ -5,10 +5,14 @@ authoritative list. It exists because the difference between "we wrote an
 adapter" and "this works on your machine" is the difference between a useful
 tool and a confident liar.
 
-**Nothing in this repository has been executed against the target Windows
-machine.** Development and testing happened on Linux. Anything marked
-*hardware dependent* is written, typechecked and unit tested, but its
-interaction with real Windows and real AMD hardware is unverified.
+**Target-PC status as of October 6, 2026:** NEXUS has now been executed against
+the target Windows 11 machine. Real hardware discovery, live CPU/GPU/memory
+telemetry, Windows process enumeration, CLI health/doctor paths, audit
+verification, and first-PC orchestration have been exercised successfully.
+Several deeper hardware integrations and any real mutating optimization write
+remain unverified on the target. See
+`docs/verification-checkpoint-2026-10-06.md` for the exact test ledger and
+remaining gate.
 
 ---
 
@@ -43,25 +47,27 @@ Exercised by the automated suite and verified to behave as described.
 
 ## IMPLEMENTED + HARDWARE DEPENDENT
 
-Written and typechecked, but never executed against real Windows or AMD
-hardware. Each is behind a capability probe, so a wrong assumption shows up as
-an unavailable capability rather than an incorrect action.
+Written and typechecked. Some rows have now been exercised on the target
+Windows machine; anything not explicitly marked as target-verified below
+remains unverified there. Each component is behind a capability probe, so a
+wrong assumption shows up as an unavailable capability rather than an
+incorrect action.
 
-| Component | What is unverified | Failure mode if wrong |
+| Component | Target status / what remains | Failure mode if wrong |
 |---|---|---|
-| `WindowsHardwareProvider` | The PowerShell discovery script against a real CIM provider | Discovery fails; NEXUS degrades and reports no inventory |
-| `WindowsTelemetrySource` | CIM class and property names for the processor and GPU performance counters | Those metrics report `unavailable`; dependent capabilities are unavailable |
-| `PersistentShell` | The long-lived PowerShell host protocol on Windows | Sensor host fails to start; telemetry source degrades |
-| `WindowsPowerSchemeAdapter` | `powercfg /getactivescheme` and `/setactive` | The capability probe fails; the control is unavailable |
-| `WindowsPowerSettingAdapter` | The subgroup and setting GUIDs, and `/setacvalueindex` behaviour | Probe fails; those controls are unavailable |
-| Elevation behaviour | Which power settings actually require Administrator on this machine | Writes fail with a permission error, which is surfaced, not swallowed |
-| `install-nexus.ps1` | Task Scheduler registration on the target machine | Task is not registered; NEXUS does not start at logon; the script is intentionally per-user and does not require the NEXUS runtime to be online. |
-| `WindowsProcessEnumerator` (`tasklist`) | `tasklist.exe /FO CSV /NH` output shape and foreground-window access on real Windows | Probe fails; `process.enumerate` stays unavailable; classification runs without process evidence and lists it in `missingSignals` |
-
-| `LibreHardwareMonitorSource` | Real LHM web endpoint payloads and sensor naming on the target | Source becomes unavailable/invalid; thermal-gated controls remain refused |
-| `PresentMonCollector` / frame truth | PresentMon installation/version and real frame-type/display attribution on the target | Frame evidence is unavailable; benefit decisions fall back to the available measured evidence |
-| OpenXR active-runtime probe | Real registry/runtime manifest state on the target | VR capability is reported unavailable/unsupported; VR-specific changes are refused |
-| Display driver identity | Real `Win32_PnPSignedDriver` result on the target | Driver identity is unavailable; a matching baseline is not assumed across unknown driver state |
+| `WindowsHardwareProvider` | **Target verified:** real Ryzen 9 9950X, RX 7900 XT, 20 GB VRAM, 96 GB RAM and Windows 11 inventory discovered successfully. | Discovery fails; NEXUS degrades and reports no inventory |
+| `WindowsTelemetrySource` | **Partially target verified:** live CPU clock/utilization, GPU utilization, and memory telemetry observed for 30 seconds. Deeper sensor sources remain unverified. | Those metrics report `unavailable`; dependent capabilities are unavailable |
+| `PersistentShell` | **Exercised on target:** live telemetry depends on the corrected Windows PowerShell path. Longer-running/error-recovery edge cases remain unverified. | Sensor host fails to start; telemetry source degrades |
+| `WindowsPowerSchemeAdapter` | **Partially target verified:** active scheme/baseline path is available. A real write and restore have not yet been exercised. | Probe fails; the capability is unavailable; writes surface errors |
+| `WindowsPowerSettingAdapter` | **Unverified for mutating writes on target.** | Probe fails or writes return a permission/setting error |
+| Elevation behaviour | **Unverified:** no controlled Administrator-only write has been used yet. | Writes fail with a permission error, which is surfaced, not swallowed |
+| `install-nexus.ps1` | **Unverified:** Task Scheduler registration on the target has not yet been tested. | Task is not registered; NEXUS does not start at logon |
+| `WindowsProcessEnumerator` | **Partially target verified:** `tasklist.exe /FO CSV /NH` works and returned the active Wardogs process. **Foreground-window helper remains unconfigured on target.** | Process enumeration stays unavailable; classification runs without process evidence |
+| Native Windows foreground helper | **Implemented, test-covered, but not yet configured on target.** Requires self-contained helper build plus absolute-path SHA pin in config. | Foreground capability remains unavailable; workload confidence may stay below action floor |
+| `LibreHardwareMonitorSource` | **Unverified:** real LHM web endpoint payloads and sensor naming on the target. | Source becomes unavailable/invalid; thermal-gated controls remain refused |
+| `PresentMonCollector` / frame truth | **Unverified:** PresentMon installation/version and real frame-type/display attribution on the target. | Frame evidence is unavailable; benefit decisions fall back to available measured evidence |
+| OpenXR active-runtime probe | **Unverified:** real registry/runtime manifest state on the target. | VR capability is reported unavailable/unsupported; VR-specific changes are refused |
+| Display driver identity | **Unverified:** real `Win32_PnPSignedDriver` result and matching-baseline behavior on the target. | Driver identity is unavailable; a matching baseline is not assumed across unknown driver state |
 
 ## MOCKED / SIMULATED
 
@@ -69,13 +75,13 @@ Deliberately synthetic. Everything derived from these is labelled `mocked` and
 can never be reported as `live`.
 
 - `MockHardwareProvider` and the `target-desktop` / `minimal-unknown` fixtures.
-  The target fixture models a Ryzen 9 9950X3D, RX 7900 XT with 20 GB, and 96 GB
-  of DDR5. It is a *model of* that machine, not a reading of it.
+  The historical target fixture models a Ryzen 9 9950X3D, RX 7900 XT with 20 GB,
+  and 96 GB of DDR5. It is a *model of* that machine, not a reading of the
+  current target, which actually reports a Ryzen 9 9950X.
 - `MockTelemetrySource` — deterministic simulated readings.
 - `MockControlAdapter` — in-memory controls used for simulation and tests.
 - `LinuxHardwareProvider` / `LinuxTelemetrySource` are **not** mocks: they read
-  this host and are `live` on Linux. They exist so the abstraction stays honest
-  during development. They are not a Windows substitute.
+  the development host and are `live` on Linux. They are not a Windows substitute.
 
 ## NOT IMPLEMENTED
 
@@ -86,7 +92,6 @@ request for them is refused with a reason rather than an "unknown capability".
 |---|---|
 | CPU die temperature, package power, per-core clocks | Requires the separate LibreHardwareMonitor bridge; NEXUS does not vendor its driver/library. |
 | GPU temperature, hotspot, fan RPM, board power, GPU clocks | Requires live sensor evidence from the separate LHM bridge and/or a future AMD adapter; NEXUS does not vendor ADLX. |
-| Process foreground detection | Implemented through the Windows foreground-window probe and used only as corroborating evidence / PresentMon target ranking; still hardware dependent on the target PC. |
 | Process priority control | Depends on process enumeration (now available) plus a write adapter that is not implemented. Remains registered as unavailable. |
 | Fan control | Prohibited by policy — an incorrect curve is a thermal hazard NEXUS cannot recover from if it loses the interface mid-change. |
 | GPU and CPU silicon tuning | Prohibited by policy — validating an overclock safely requires a stress methodology NEXUS does not own. |
@@ -95,7 +100,7 @@ request for them is refused with a reason rather than an "unknown capability".
 
 ## Development infrastructure
 
-Software-only; no target-PC validation is implied.
+Software-only; no target-PC validation is implied unless stated above.
 
 | Item | Status |
 |---|---|
@@ -104,8 +109,17 @@ Software-only; no target-PC validation is implied.
 
 ## Mature-stack notes
 
-The merged hardening follows the same useful separation seen in mature desktop tooling: process/library orchestration stays distinct from hardware backends, frame timing is collected by a dedicated truth source instead of reconstructed in-process, and user-facing profile selection remains separate from machine-control authority. Playnite, FanControl, MangoHud and Special K were used as architectural references only; no third-party source was vendored from them.
+The merged hardening follows the same useful separation seen in mature desktop
+tooling: process/library orchestration stays distinct from hardware backends,
+frame timing is collected by a dedicated truth source instead of reconstructed
+in-process, and user-facing profile selection remains separate from machine-control
+authority. Playnite, FanControl, MangoHud and Special K were used as
+architectural references only; no third-party source was vendored from them.
 
 ## Private primary-target specialization
 
-The private development target is Ryzen 9 9950X3D + Radeon RX 7900 XT 20 GB + 96 GB DDR5. The specialization layer recognizes this target and prevents automatic generic profiles from changing whole-package core parking or the processor minimum state until the X3D-specific measurement stack is present. This is a strategy guard, not a replacement for the deterministic safety kernel.
+The current machine reports **Ryzen 9 9950X + Radeon RX 7900 XT 20 GB + 96 GB
+RAM**. Some design specialization text still references a Ryzen 9 9950X3D.
+That specialization must not be treated as validated for this machine until
+its assumptions are reconciled with the detected non-X3D CPU and the required
+measurement stack.
